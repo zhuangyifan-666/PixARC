@@ -1,0 +1,9 @@
+# Evaluation and CPU-test extras only. Do not install from this task automatically.
+numpy
+Pillow
+PyYAML
+scikit-image
+pytest
+# Optional strict paired metric. alex weights must already be available locally.
+lpips
+

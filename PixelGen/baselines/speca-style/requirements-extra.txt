@@ -1,0 +1,9 @@
+# Optional evaluation/CPU-test extras. This task must not install them.
+numpy
+Pillow
+PyYAML
+scikit-image
+pytest
+# Strict paired LPIPS uses AlexNet weights already present locally; never download here.
+lpips
+

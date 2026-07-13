@@ -1,0 +1,38 @@
+schema_version: pixarc-speca-audited-defaults-v1
+source:
+  repository: baselines/Cache4Diffusion
+  commit: 91a1949fcc88acab46547f0b5f295f5de2df2870
+  entrypoint: dit/speca-dit/sample_ddp.py
+  role: released_50k_DDP_reference_defaults
+cli_defaults:
+  model: DiT-XL/2
+  vae: ema
+  per_proc_batch_size: 1
+  num_fid_samples: 50000
+  image_size: 256
+  num_classes: 1000
+  cfg_scale: 1.5
+  num_sampling_steps: 100
+  global_seed: 0
+  tf32: true
+  ddim_sample: true
+  interval: 0
+  max_order: 4
+  base_threshold: 0.3
+  decay_rate: 0.05
+  min_taylor_steps: 3
+  max_taylor_steps: 8
+  error_metric: relative_l1
+derived_release_semantics:
+  first_enhance: 3
+  threshold_floor: 0.01
+  verify_layer: 27
+  verify_layer_semantics: last_block_of_DiT_XL_2_depth_28
+  verification_token_scope: all_tokens
+  gate_mode: batch_global
+  current_failed_verification_is_not_rolled_back: true
+  verification_error_schedules_next_step: true
+port_note:
+  defaults_are_audit_evidence_not_JiT_hyperparameters: true
+  JiT_Heun_NFE_coordinates_require_independent_validation: true
+

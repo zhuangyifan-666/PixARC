@@ -1,0 +1,29 @@
+# Legacy filename retained for local tooling compatibility.  This is a SpeCa
+# threshold/span sweep; `interval` is not used by the released SpeCa scheduler.
+schema_version: pixarc-speca-sweep-v1
+purpose: independent_8k_validation_only
+base_config: jit_b16_256_speca.yaml
+candidate_max_orders: [1, 2, 3, 4]
+candidate_base_thresholds: [0.1, 0.2, 0.3, 0.4]
+candidate_decay_rates: [0.01, 0.05, 0.1]
+candidate_min_taylor_steps: [2, 3, 4]
+candidate_max_taylor_steps: [5, 8, 10]
+fixed:
+  scheduler_mode: released_code_faithful
+  first_enhance: 3
+  threshold_floor: 0.01
+  error_metric: relative_l1
+  error_eps: 1.0e-10
+  verify_layer: -1
+  verification_token_scope: all_tokens
+  gate_mode: batch_global
+  coordinate_mode: official_nfe_index
+  force_last_full: false
+  cache_dtype: inherit
+  compile_mode: matched_eager
+  real_batch_size: 1
+selection:
+  final_50k_may_not_be_used_for_selection: true
+  compare_at_measured_latency_or_speedup: true
+  report_operating_points: [conservative, medium, aggressive]
+

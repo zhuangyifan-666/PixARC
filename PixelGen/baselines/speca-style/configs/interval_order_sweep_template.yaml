@@ -1,0 +1,15 @@
+# Diagnostic fixed-draft sweep only; it is not the released-code SpeCa result.
+schema_version: pixarc-speca-sweep-v1
+purpose: taylor_draft_fixed_diagnostic
+base_config: pixelgen_xl_256_taylor_draft_fixed.yaml
+fixed:
+  mode: taylor_draft_fixed
+  scheduler_mode: fixed_taylor_draft
+  first_enhance: 2
+  coordinate_mode: official_nfe_index
+  real_batch_size: 1
+  effective_cfg_batch_size: 2
+sweep:
+  interval: [2, 3, 4, 5]
+  max_order: [1, 2, 3, 4]
+selection_rule: diagnostic_only_no_primary_claim

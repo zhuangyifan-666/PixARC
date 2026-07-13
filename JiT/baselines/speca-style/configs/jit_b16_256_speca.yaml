@@ -1,0 +1,44 @@
+# PLACEHOLDER_REQUIRES_VALIDATION: freeze an external copy after the independent
+# 8K sweep and replace every null search parameter.  The runner rejects nulls.
+schema_version: pixarc-speca-config-v1
+model:
+  variant: JiT-B/16
+  checkpoint: ../../../checkpoints/JiT-B-16-256/checkpoint-last.pth
+  image_size: 256
+  num_classes: 1000
+  ema: model_ema1
+  args:
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+sampling:
+  method: heun
+  steps: 50
+  exact_heun: true
+  cfg_scale: 3.0
+  guidance_interval: [0.1, 1.0]
+  noise_scale: 1.0
+  dtype: bfloat16
+speca:
+  mode: speca
+  scheduler_mode: released_code_faithful
+  interval: null
+  max_order: null
+  base_threshold: null
+  decay_rate: null
+  min_taylor_steps: null
+  max_taylor_steps: null
+  first_enhance: 3
+  threshold_floor: 0.01
+  error_metric: relative_l1
+  error_eps: 1.0e-10
+  verify_layer: -1
+  verification_token_scope: all_tokens
+  gate_mode: batch_global
+  coordinate_mode: official_nfe_index
+  force_last_full: false
+  cache_dtype: inherit
+  trace_mode: summary
+runtime:
+  batch_size: 1
+  compile_mode: matched_eager
+
