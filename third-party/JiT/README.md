@@ -110,7 +110,7 @@ main_jit.py \
 --img_size 256 (or 512) --noise_scale 1.0 (or 2.0) \
 --gen_bsz 256 --num_images 50000 --cfg 3.0 --interval_min 0.1 --interval_max 1.0 \
 --output_dir ${CKPT_DIR} --resume ${CKPT_DIR} \
---data_path ${IMAGENET_PATH} --evaluate_gen
+--evaluate_gen --keep_generated_images
 ```
 
 Evaluate pre-trained JiT-L:
@@ -121,7 +121,7 @@ main_jit.py \
 --img_size 256 (or 512) --noise_scale 1.0 (or 2.0) \
 --gen_bsz 256 --num_images 50000 --cfg 2.4 (or 2.5) --interval_min 0.1 --interval_max 1.0 \
 --output_dir ${CKPT_DIR} --resume ${CKPT_DIR} \
---data_path ${IMAGENET_PATH} --evaluate_gen
+--evaluate_gen --keep_generated_images
 ```
 
 Evaluate pre-trained JiT-H:
@@ -132,13 +132,15 @@ main_jit.py \
 --img_size 256 (or 512) --noise_scale 1.0 (or 2.0) \
 --gen_bsz 256 --num_images 50000 --cfg 2.2 (or 2.3) --interval_min 0.1 --interval_max 1.0 \
 --output_dir ${CKPT_DIR} --resume ${CKPT_DIR} \
---data_path ${IMAGENET_PATH} --evaluate_gen
+--evaluate_gen --keep_generated_images
 ```
 
-We use a customized [```torch-fidelity```](https://github.com/LTH14/torch-fidelity)
-to evaluate FID and IS against a reference image folder or statistics. You can use ```prepare_ref.py```
-to prepare the reference image folder, or directly use our pre-computed reference stats
-under ```fid_stats```.
+Standalone evaluation does not require an ImageNet directory. The standard
+```torch-fidelity``` package is used to compute FID and IS with the pre-computed
+reference statistics under ```fid_stats```. Generated PNG files are removed after
+successful metric computation by default; pass ```--keep_generated_images``` to
+retain them, or ```--skip_metrics``` to generate and retain images without computing
+FID and IS. You can also use ```prepare_ref.py``` to prepare a reference image folder.
 
 ### Acknowledgements
 

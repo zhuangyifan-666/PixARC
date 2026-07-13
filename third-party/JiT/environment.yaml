@@ -17,4 +17,4 @@ dependencies:
     - scipy==1.9.1
     - einops==0.8.1
     - gdown==5.2.0
-    - -e git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity
+    - torch-fidelity==0.3.0

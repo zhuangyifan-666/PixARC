@@ -21,7 +21,7 @@ from denoiser import Denoiser
 
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('JiT', add_help=False)
+    parser = argparse.ArgumentParser('JiT')
 
     # architecture
     parser.add_argument('--model', default='JiT-B/16', type=str, metavar='MODEL',
@@ -84,6 +84,12 @@ def get_args_parser():
     parser.add_argument('--evaluate_gen', action='store_true')
     parser.add_argument('--gen_bsz', type=int, default=256,
                         help='Generation batch size')
+    parser.add_argument('--metrics_batch_size', type=int, default=64,
+                        help='Batch size for FID and Inception Score feature extraction')
+    parser.add_argument('--skip_metrics', action='store_true',
+                        help='Generate images without computing FID and Inception Score')
+    parser.add_argument('--keep_generated_images', action='store_true',
+                        help='Keep generated PNG files after metric computation')
 
     # dataset
     parser.add_argument('--data_path', default='./data/imagenet', type=str,
@@ -136,28 +142,31 @@ def main(args):
     else:
         log_writer = None
 
-    # Data augmentation transforms
-    transform_train = transforms.Compose([
-        transforms.Lambda(lambda img: center_crop_arr(img, args.img_size)),
-        transforms.RandomHorizontalFlip(),
-        transforms.PILToTensor()
-    ])
+    data_loader_train = None
+    if not args.evaluate_gen:
+        # The ImageNet training split is only needed for training. Standalone
+        # checkpoint evaluation should work with no local ImageNet copy.
+        transform_train = transforms.Compose([
+            transforms.Lambda(lambda img: center_crop_arr(img, args.img_size)),
+            transforms.RandomHorizontalFlip(),
+            transforms.PILToTensor()
+        ])
 
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+        dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+        print(dataset_train)
 
-    sampler_train = torch.utils.data.DistributedSampler(
-        dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-    )
-    print("Sampler_train =", sampler_train)
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+        )
+        print("Sampler_train =", sampler_train)
 
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True
-    )
+        data_loader_train = torch.utils.data.DataLoader(
+            dataset_train, sampler=sampler_train,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_mem,
+            drop_last=True
+        )
 
     torch._dynamo.config.cache_size_limit = 128
     torch._dynamo.config.optimize_ddp = False
@@ -182,10 +191,13 @@ def main(args):
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
     model_without_ddp = model.module
 
-    # Set up optimizer with weight decay adjustment for bias and norm layers
-    param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
-    optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
-    print(optimizer)
+    optimizer = None
+    if not args.evaluate_gen:
+        # Optimizer state is not needed for standalone generation and can consume
+        # several additional gigabytes when restored from a training checkpoint.
+        param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
+        optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
+        print(optimizer)
 
     # Resume from checkpoint if provided
     checkpoint_path = os.path.join(args.resume, "checkpoint-last.pth") if args.resume else None
@@ -199,7 +211,7 @@ def main(args):
         model_without_ddp.ema_params2 = [ema_state_dict2[name].cuda() for name, _ in model_without_ddp.named_parameters()]
         print("Resumed checkpoint from", args.resume)
 
-        if 'optimizer' in checkpoint and 'epoch' in checkpoint:
+        if optimizer is not None and 'optimizer' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             args.start_epoch = checkpoint['epoch'] + 1
             print("Loaded optimizer & scaler state!")
@@ -212,7 +224,7 @@ def main(args):
     # Evaluate generation
     if args.evaluate_gen:
         print("Evaluating checkpoint at {} epoch".format(args.start_epoch))
-        with torch.random.fork_rng():
+        with torch.random.fork_rng(devices=[args.gpu]):
             torch.manual_seed(seed)
             with torch.no_grad():
                 evaluate(model_without_ddp, args, 0, batch_size=args.gen_bsz, log_writer=log_writer)
@@ -263,4 +275,8 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser().parse_args()
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    main(args)
+    try:
+        main(args)
+    finally:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
