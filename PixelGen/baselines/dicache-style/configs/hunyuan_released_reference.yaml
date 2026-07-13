@@ -1,0 +1,15 @@
+schema_version: pixarc-dicache-reference-v1
+profile: hunyuan_released_reference
+source_commit: fdbe20b669c9174bbed5ec994de073fd881c8010
+source_file: HunyuanVideo/run_hunyuanvideo_dicache.py
+probe_depth: 1
+error_choice: delta_y
+demo_rel_l1_thresh: 0.1
+ret_ratio: 0.2
+gamma_min: 1.0
+gamma_max: 1.5
+force_last_full: false
+threshold_compare: less_equal_for_reuse
+warmup_semantics: probe_when_cnt_greater_equal_floor
+cfg_state: one_combined_batch_global_stream
+main_result: false

@@ -1,0 +1,9 @@
+schema_version: pixarc-dicache-sweep-v1
+base_config: jit_b16_256_dicache.yaml
+selection_split: pilot_1k_then_independent_validation_8k
+search_parameter: rel_l1_thresh
+candidate_thresholds: null
+selection_objective: measured_latency_quality_frontier
+reported_operating_points: [conservative, medium, aggressive]
+final_50k_tuning_forbidden: true
+

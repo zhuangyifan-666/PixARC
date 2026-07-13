@@ -1,0 +1,5 @@
+from test_stream_isolation import test_cond_uncond_actions_and_anchors_are_independent
+
+
+def test_explicit_stream_ids_allow_disagreement():
+    test_cond_uncond_actions_and_anchors_are_independent()

@@ -1,0 +1,7 @@
+schema_version: pixarc-dicache-ablation-v1
+base_config: jit_b16_256_dicache.yaml
+profile: explicit_ablation
+probe_depth_values: [1, 2, 3]
+fixed_main_result_probe_depth: 1
+not_a_main_dicache_result: true
+

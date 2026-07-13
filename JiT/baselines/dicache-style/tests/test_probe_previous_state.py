@@ -1,0 +1,5 @@
+from test_exact_only_anchors import test_reuse_does_not_write_anchor_but_updates_previous_probe
+
+
+def test_previous_state_contract():
+    test_reuse_does_not_write_anchor_but_updates_previous_probe()

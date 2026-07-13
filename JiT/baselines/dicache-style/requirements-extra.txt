@@ -1,0 +1,9 @@
+# JiT supplies torch and its model dependencies.
+PyYAML
+Pillow
+numpy
+scipy
+# Optional paired perceptual metric:
+lpips
+# Optional ImageNet distribution metrics/evaluator adapters:
+clean-fid

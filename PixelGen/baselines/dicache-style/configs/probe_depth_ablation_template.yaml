@@ -1,0 +1,11 @@
+schema_version: pixarc-dicache-ablation-v1
+purpose: probe_depth_cost_correlation_ablation_only
+base_config: pixelgen_xl_256_dicache.yaml
+probe_depths: [1, 2, 3]
+fixed_main_fields:
+  error_choice: delta_y
+  ret_ratio: 0.2
+  gamma_min: 1.0
+  gamma_max: 1.5
+  gate_mode: batch_global
+warning: any_depth_other_than_1_is_not_the_main_flux_image_profile

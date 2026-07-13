@@ -1,0 +1,7 @@
+{
+  "model_config": "/ABSOLUTE/PATH/TO/materialized_jit_b16_256_dicache.yaml",
+  "batch_size": 1,
+  "sample_ids": [0],
+  "seeds": [0],
+  "class_ids": [0]
+}

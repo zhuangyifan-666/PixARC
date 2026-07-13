@@ -1,0 +1,24 @@
+schema_version: pixarc-dicache-sweep-v1
+purpose: disjoint_threshold_validation_only
+base_config: pixelgen_xl_256_dicache.yaml
+coarse_1k_rel_l1_thresholds: [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64]
+fine_8k_rel_l1_thresholds: null
+fixed:
+  profile: flux_image_released
+  probe_depth: 1
+  error_choice: delta_y
+  ret_ratio: 0.2
+  gamma_min: 1.0
+  gamma_max: 1.5
+  force_last_full: true
+  gate_mode: batch_global
+  numeric_mode: official_no_epsilon
+  gamma_nonfinite_policy: null
+  real_batch_size: 1
+  effective_cfg_batch_size: 2
+  compile_mode: matched_eager
+selection:
+  gamma_nonfinite_policy_must_be_preregistered_after_gpu_smoke: true
+  final_50k_may_not_be_used: true
+  match_measured_latency_or_speedup: true
+  report_operating_points: [conservative, medium, aggressive]

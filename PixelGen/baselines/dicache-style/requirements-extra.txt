@@ -1,0 +1,11 @@
+# PixelGen supplies torch/lightning and its model dependencies.
+PyYAML
+Pillow
+numpy
+scipy
+scikit-image
+torchmetrics
+# Optional paired perceptual metric:
+lpips
+# Optional ImageNet distribution metrics:
+clean-fid
