@@ -1,6 +1,68 @@
-/checkpoints
+# Model weights and large artifacts
+/checkpoints/
+/JiT/checkpoints/
+/PixelGen/checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.onnx
+
+# Local reference implementations (nested Git repositories)
+/baselines/
+
+# Local datasets and download caches
+/data/
+/datasets/
+.cache/
+.huggingface/
+
+# Training, evaluation, and experiment outputs
+output/
+outputs/
+output_dir/
+runs/
+wandb/
+lightning_logs/
+workdirs/
+universal_pix_workdirs/
+universal_pix_t2i_workdirs/
+
+# Python bytecode and tool caches
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments and packaging artifacts
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 .ds_store
-/baselines
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
