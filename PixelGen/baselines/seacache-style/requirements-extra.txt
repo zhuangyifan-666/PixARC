@@ -1,0 +1,7 @@
+Pillow
+PyYAML
+scikit-image
+pytest
+# Optional, required only for paired AlexNet LPIPS:
+lpips
+# ADM evaluator and ImageNet reference NPZ must be supplied locally.

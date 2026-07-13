@@ -1,0 +1,23 @@
+status: PLACEHOLDER_REQUIRES_VALIDATION
+model: PixelGen_XL_256
+validation_manifest: ${VALIDATION_MANIFEST}
+expected_count: 8000
+samples_per_class: 8
+fixed:
+  exact_henu: true
+  num_steps: 50
+  guidance: 2.25
+  guidance_interval: [0.1, 0.9]
+  timeshift: 2.0
+  precision: bf16-mixed
+  world_size: 4
+  batch_size_per_rank: 4
+  compile_mode: matched_eager
+  checkpoint: ../../../checkpoints/PixelGen_XL_160ep.ckpt
+candidate_thresholds: [0.02, 0.05, 0.10, 0.20, 0.40]
+selection: measured_latency_quality_pareto_not_cache_ratio
+operating_points:
+  conservative: PLACEHOLDER_REQUIRES_VALIDATION
+  medium: PLACEHOLDER_REQUIRES_VALIDATION
+  aggressive: PLACEHOLDER_REQUIRES_VALIDATION
+final_50k_tuning_prohibited: true

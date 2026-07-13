@@ -1,0 +1,11 @@
+# The upstream JiT environment already supplies torch and numpy.
+Pillow
+PyYAML
+scikit-image
+pytest
+
+# Optional, required only for the LPIPS portion of paired evaluation.
+lpips
+
+# The unified distribution evaluator is an explicit local ADM evaluation
+# checkout supplied via --evaluator; it is intentionally not downloaded here.

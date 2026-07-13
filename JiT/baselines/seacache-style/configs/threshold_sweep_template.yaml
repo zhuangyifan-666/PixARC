@@ -1,0 +1,43 @@
+schema_version: pixarc-seacache-threshold-sweep-v1
+status: PLACEHOLDER_REQUIRES_VALIDATION
+method: SeaCache-style port
+model: JiT-B/16
+
+selection_split:
+  name: imagenet_c2i_validation_8k
+  manifest: ${VALIDATION_MANIFEST}
+  expected_count: 8000
+  samples_per_class: 8
+  must_not_overlap_final_seeds: true
+
+fixed_protocol:
+  image_size: 256
+  sampler: heun
+  num_steps: 50
+  cfg_scale: 3.0
+  cfg_interval: [0.1, 1.0]
+  dtype: bfloat16
+  world_size: 4
+  batch_size_per_rank: 32
+  compile_mode: matched_eager
+  checkpoint: ../../../checkpoints/JiT-B-16-256/checkpoint-last.pth
+  parameter_set: model_ema1
+
+# These are coarse search candidates, not recommended or selected thresholds.
+# Replace/refine them using the measured latency-quality Pareto frontier.
+candidate_thresholds: [0.02, 0.05, 0.10, 0.20, 0.40]
+
+selection_metrics:
+  quality: [fid, sfid, inception_score, precision, recall, psnr, ssim, lpips]
+  performance: [median_ms_per_image, speedup, full_body_ratio]
+  select_on_cache_ratio: false
+
+operating_points:
+  conservative: PLACEHOLDER_REQUIRES_VALIDATION
+  medium: PLACEHOLDER_REQUIRES_VALIDATION
+  aggressive: PLACEHOLDER_REQUIRES_VALIDATION
+
+finalization:
+  selected_config: ${SELECTED_CONFIG}
+  require_config_sha256: true
+  prohibit_final_50k_tuning: true

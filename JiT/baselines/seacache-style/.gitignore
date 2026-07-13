@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated experiments belong outside the source tree.
+outputs/
+runs/
+artifacts/
+logs/
+*.png
+*.npz
+*.pth
+*.ckpt
+*.log
+

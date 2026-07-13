@@ -1,0 +1,27 @@
+# PLACEHOLDER_REQUIRES_VALIDATION: copy this file after the 8K sweep and replace
+# threshold: null with the selected numeric value. The runner must reject null.
+model:
+  variant: JiT-B/16
+  checkpoint: ../../../checkpoints/JiT-B-16-256/checkpoint-last.pth
+  image_size: 256
+  num_classes: 1000
+  args:
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+
+sampling:
+  method: heun
+  steps: 50
+  cfg_scale: 3.0
+  guidance_interval: [0.1, 1.0]
+  noise_scale: 1.0
+  dtype: bfloat16
+
+seacache:
+  mode: seacache
+  threshold: null
+  trace_mode: summary
+
+runtime:
+  batch_size: 32
+  compile_mode: matched_eager
