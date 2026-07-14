@@ -11,11 +11,18 @@ import importlib
 import json
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any, Callable, Mapping, Sequence
+
+# ``python -m package.latency`` executes this file as ``__main__``.  Bind the
+# canonical module name before loading a runner factory so both sides share
+# the same BenchmarkSpec class identity.
+if __name__ == "__main__" and __spec__ is not None:
+    sys.modules[__spec__.name] = sys.modules[__name__]
 
 import numpy as np
 import torch

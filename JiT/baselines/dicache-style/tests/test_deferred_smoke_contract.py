@@ -17,6 +17,7 @@ def test_deferred_smoke_uses_resume_report_and_derived_counts():
     assert source.index('python "$SCRIPT_ROOT/run_gpu_model_parity.py"') < source.index(
         'DICACHE_INVOCATION_ID="smoke-upstream-'
     )
+    assert '--manifest "$MANIFEST" --batch-group-id "$FIRST_BATCH_GROUP_ID"' in source
     assert "expected_nfe = int(parity.get" in source
     assert "expected_forwards = int(parity.get" in source
     assert "nine_resume_invariants" in source

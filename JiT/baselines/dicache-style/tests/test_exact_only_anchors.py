@@ -24,3 +24,31 @@ def test_reuse_does_not_write_anchor_but_updates_previous_probe():
     assert len(state.anchors) == 1
     assert torch.equal(state.previous_body_input, current)
     assert torch.equal(state.previous_probe_feature, probe)
+
+
+def test_mixed_precision_full_normalizes_both_anchor_residuals():
+    runtime = DiCacheRuntime(
+        mode="dicache", profile="explicit_ablation", rel_l1_thresh=1.0,
+        ret_ratio=0.0, force_last_full=False,
+    )
+    runtime.begin_trajectory(
+        total_nfe=1, stream_total_calls={"cond": 1}, trajectory_id="mixed",
+        sample_ids=[0], real_batch_size=1, effective_cfg_batch_size=1,
+    )
+    body = torch.zeros(1, 2, 3, dtype=torch.bfloat16)
+    probe = torch.ones_like(body)
+    exact = torch.full(body.shape, 2.0, dtype=torch.float32)
+    runtime.begin_nfe(
+        macro_step_index=0, solver_stage="p", continuous_t=0, t_next=1,
+    )
+    plan = runtime.plan_stream_call("cond", body)
+    runtime.complete_full(
+        plan=plan, body_input=body, probe_feature=probe,
+        exact_body_output=exact, resumed=False,
+    )
+
+    anchor = runtime.trajectory.streams["cond"].anchors.latest
+    assert anchor.full_residual.dtype == torch.float32
+    assert anchor.probe_residual.dtype == torch.float32
+    assert torch.equal(anchor.full_residual, torch.full_like(exact, 2.0))
+    assert torch.equal(anchor.probe_residual, torch.full_like(exact, 1.0))

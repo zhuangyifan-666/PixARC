@@ -203,6 +203,8 @@ def main() -> None:
     parser.add_argument("--sample-id", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--class-id", type=int, required=True)
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--batch-group-id", required=True)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--atol", type=float, default=0.0)
     parser.add_argument("--rtol", type=float, default=0.0)
@@ -230,6 +232,8 @@ def main() -> None:
             "sample_ids": [arguments.sample_id],
             "seeds": [arguments.seed],
             "class_ids": [arguments.class_id],
+            "manifest": arguments.manifest,
+            "batch_group_id": arguments.batch_group_id,
         }
     )
     upstream = spec.full.upstream_body_and_image()  # type: ignore[attr-defined]

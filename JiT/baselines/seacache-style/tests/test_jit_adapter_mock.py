@@ -38,10 +38,12 @@ class MockBlock(nn.Module):
     def __init__(self, scale):
         super().__init__()
         self.scale = scale
+        self.input_dtypes = []
         self.norm1 = nn.Identity()
         self.adaLN_modulation = ZeroModulation()
 
     def forward(self, hidden_states, condition, _rope):
+        self.input_dtypes.append(hidden_states.dtype)
         return hidden_states + self.scale * condition.unsqueeze(1)
 
 
@@ -118,7 +120,20 @@ def test_force_full_preserves_autocast_token_dtype_at_position_add():
         def forward(self, x):
             return super().forward(x).to(torch.bfloat16)
 
+    class LowPrecisionTime(TimeEmbed):
+        def forward(self, values):
+            return super().forward(values).to(torch.bfloat16)
+
+    class LowPrecisionLabel(LabelEmbed):
+        def forward(self, labels):
+            return super().forward(labels).to(torch.bfloat16)
+
     model.x_embedder = LowPrecisionPatch()
+    model.t_embedder = LowPrecisionTime()
+    model.y_embedder = LowPrecisionLabel()
+    model.final_layer = model.final_layer.to(torch.bfloat16)
+    assert model.pos_embed.dtype == torch.float32
+    assert model.in_context_posemb.dtype == torch.float32
     controller = SeaCacheController(mode="force_full_with_gate", trace_mode="off")
     model.configure_seacache(controller, "force_full_with_gate")
     controller.begin_trajectory("cond", "dtype", 1, (0,))
@@ -129,6 +144,10 @@ def test_force_full_preserves_autocast_token_dtype_at_position_add():
         cache_stream="cond",
     )
     assert controller.state("cond").expected_dtype == torch.bfloat16
+    assert [block.input_dtypes for block in model.blocks] == [
+        [torch.bfloat16],
+        [torch.bfloat16],
+    ]
     controller.end_trajectory("cond")
 
 

@@ -206,10 +206,12 @@ class _ZeroMod(nn.Module):
 class _Block(nn.Module):
     def __init__(self):
         super().__init__()
+        self.input_dtypes = []
         self.adaLN_modulation = _ZeroMod()
         self.norm1 = nn.Identity()
 
     def forward(self, x, condition, rope):
+        self.input_dtypes.append(x.dtype)
         return x + 1
 
 
@@ -284,6 +286,25 @@ class CombinedCFGStateTest(unittest.TestCase):
         self.assertEqual(
             model.seacache_controller.computes[-1]["dtype"], torch.bfloat16
         )
+
+    def test_context_position_add_preserves_low_precision_tokens(self):
+        model = ToyDiagnosticModel()
+        model.in_context_len = 1
+        model.in_context_start = 0
+        model.in_context_posemb = nn.Parameter(torch.zeros(1, 1, 1))
+        diagnostic = {"feat": None, "last_out": None, "y_emb": torch.zeros(
+            2, 1, dtype=torch.bfloat16
+        )}
+        body = torch.zeros(2, 4, 1, dtype=torch.bfloat16)
+        result = model._pixelgen_body(
+            body,
+            torch.zeros(2, 1, dtype=torch.bfloat16),
+            return_layer=None,
+            return_last=False,
+            diagnostic=diagnostic,
+        )
+        self.assertEqual(result.dtype, torch.bfloat16)
+        self.assertEqual(model.blocks[0].input_dtypes, [torch.bfloat16])
 
     def test_combined_ids_keep_upstream_2b_order(self):
         self.assertEqual(combined_cfg_sample_ids([10, 20], 2), (10, 20, 10, 20))

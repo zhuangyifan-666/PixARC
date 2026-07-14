@@ -140,9 +140,10 @@ diagnostic threshold is for proving reuse only and is prohibited as a reported
 operating point:
 
 ```bash
+FULL_CONFIG="$OUTPUT_ROOT/configs/jit_full_smoke.yaml"
 FORCE_FULL_CONFIG="$OUTPUT_ROOT/configs/jit_force_full_smoke.yaml"
 DIAGNOSTIC_CONFIG="$OUTPUT_ROOT/configs/jit_seacache_diagnostic.yaml"
-export FORCE_FULL_CONFIG DIAGNOSTIC_CONFIG
+export FULL_CONFIG FORCE_FULL_CONFIG DIAGNOSTIC_CONFIG
 python - <<'PY'
 import copy
 import os
@@ -150,6 +151,14 @@ from pathlib import Path
 
 import yaml
 
+full = yaml.safe_load(Path("configs/jit_b16_256_full.yaml").read_text(encoding="utf-8"))
+full["model"]["checkpoint"] = os.environ["CHECKPOINT"]
+full["runtime"]["batch_size"] = 2
+full_path = Path(os.environ["FULL_CONFIG"])
+full_path.parent.mkdir(parents=True, exist_ok=True)
+full_path.write_text(
+    yaml.safe_dump(full, sort_keys=False), encoding="utf-8"
+)
 base = yaml.safe_load(Path("configs/jit_b16_256_seacache.yaml").read_text(encoding="utf-8"))
 for destination, mode, threshold in (
     (os.environ["FORCE_FULL_CONFIG"], "force_full_with_gate", 0.0),
@@ -157,6 +166,7 @@ for destination, mode, threshold in (
 ):
     config = copy.deepcopy(base)
     config["model"]["checkpoint"] = os.environ["CHECKPOINT"]
+    config["runtime"]["batch_size"] = 2
     config["seacache"].update(mode=mode, threshold=threshold)
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,7 +190,7 @@ export SEACACHE_GPU_TESTS_ALLOWED=1
 SMOKE_PARITY_ROOT="$OUTPUT_ROOT/smoke/jit_full_vs_force_full"
 export SMOKE_PARITY_ROOT
 bash scripts/run_deferred_smoke_tests.sh \
-  --full-config configs/jit_b16_256_full.yaml \
+  --full-config "$FULL_CONFIG" \
   --candidate-config "$FORCE_FULL_CONFIG" \
   --manifest "$SMOKE_MANIFEST" \
   --output-root "$SMOKE_PARITY_ROOT"

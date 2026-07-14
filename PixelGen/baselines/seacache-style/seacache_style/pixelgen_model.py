@@ -102,7 +102,7 @@ class PixelGenSeaCacheModelMixin:
                 y_emb = diagnostic["y_emb"]
                 assert y_emb is not None
                 in_context_tokens = y_emb.unsqueeze(1).repeat(1, self.in_context_len, 1)
-                in_context_tokens = in_context_tokens + self.in_context_posemb
+                in_context_tokens += self.in_context_posemb
                 x = torch.cat([in_context_tokens, x], dim=1)
 
             rope = (
@@ -137,6 +137,7 @@ class PixelGenSeaCacheModelMixin:
         condition = t_emb + y_emb
 
         body_input = self.x_embedder(x)
+        embedded_dtype = body_input.dtype
         if body_input.ndim != 3 or body_input.shape[1] != grid_shape[0] * grid_shape[1]:
             raise ValueError(
                 f"patch grid {grid_shape} does not match embedded token shape "
@@ -145,6 +146,8 @@ class PixelGenSeaCacheModelMixin:
         # Match upstream's in-place add so autocast BF16/FP16 tokens are not
         # promoted to FP32 by an out-of-place expression.
         body_input += self.pos_embed
+        if body_input.dtype != embedded_dtype:
+            raise TypeError("position addition changed PixelGen body token dtype")
         diagnostic: Dict[str, Optional[torch.Tensor]] = {
             "y_emb": y_emb,
             "feat": None,

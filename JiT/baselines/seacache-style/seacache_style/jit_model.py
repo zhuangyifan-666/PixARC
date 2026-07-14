@@ -97,7 +97,7 @@ class SeaCacheJiT(UpstreamJiT):
         for index, block in enumerate(self.blocks):
             if self.in_context_len > 0 and index == self.in_context_start:
                 context = y_emb.unsqueeze(1).repeat(1, self.in_context_len, 1)
-                context = context + self.in_context_posemb
+                context += self.in_context_posemb
                 hidden_states = torch.cat([context, hidden_states], dim=1)
             rope = (
                 self.feat_rope
@@ -153,9 +153,12 @@ class SeaCacheJiT(UpstreamJiT):
         y_emb = self.y_embedder(y)
         c = t_emb + y_emb
         body_input = self.x_embedder(x)
+        embedded_dtype = body_input.dtype
         # Preserve upstream autocast semantics: the in-place add keeps the
         # patch-embedding dtype instead of promoting BF16/FP16 tokens to FP32.
         body_input += self.pos_embed
+        if body_input.dtype != embedded_dtype:
+            raise TypeError("position addition changed JiT body token dtype")
 
         token_count = int(body_input.shape[1])
         if grid_shape[0] * grid_shape[1] != token_count:

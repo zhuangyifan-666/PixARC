@@ -148,3 +148,40 @@ def test_jit_adapter_context_is_stable_and_removed_before_head(monkeypatch):
     summary = runtime.end_trajectory()
     assert summary["full_nfe"] == 2 and summary["taylor_nfe"] == 1
     assert all("taylor" not in key for key in model.state_dict())
+
+
+def test_body_and_context_position_adds_preserve_bfloat16(monkeypatch):
+    monkeypatch.setattr(
+        jit_model,
+        "modulate",
+        lambda value, shift, scale: value * (1 + scale.unsqueeze(1))
+        + shift.unsqueeze(1),
+    )
+    model = _toy_adapter()
+    model.y_embedder.weight.data = model.y_embedder.weight.data.to(torch.bfloat16)
+    assert model.pos_embed.dtype == torch.float32
+    assert model.in_context_posemb.dtype == torch.float32
+
+    runtime = model.taylor_runtime
+    runtime.begin_trajectory(total_nfe=1, expected_streams={"cond"})
+    runtime.begin_nfe(
+        macro_step_index=0,
+        solver_stage="final_euler",
+        continuous_t=0.0,
+    )
+    output = model.forward_taylor(
+        torch.arange(4, dtype=torch.bfloat16).reshape(1, 1, 2, 2),
+        torch.tensor([0.25], dtype=torch.bfloat16),
+        torch.tensor([1]),
+        stream_id="cond",
+    )
+    runtime.end_nfe()
+
+    assert output.dtype == torch.bfloat16
+    for layer_index in range(2):
+        for module_name in ("attn", "mlp"):
+            state = runtime.streams["cond"].module_states[
+                (layer_index, module_name)
+            ]
+            assert state.factors[0].dtype == torch.bfloat16
+    runtime.end_trajectory()

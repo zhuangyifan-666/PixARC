@@ -356,9 +356,13 @@ def build_benchmark_spec(runner: Mapping[str, Any]) -> BenchmarkSpec:
             exact_body = kwargs["exact_body_output"]
             body_input = kwargs["body_input"]
             probe_feature = kwargs["probe_feature"]
-            expected_full = (exact_body - body_input).to(anchor.full_residual.dtype)
-            expected_probe = (probe_feature - body_input).to(anchor.probe_residual.dtype)
-            wrong_full = (exact_body - probe_feature).to(anchor.full_residual.dtype)
+            full_dtype = anchor.full_residual.dtype
+            probe_dtype = anchor.probe_residual.dtype
+            expected_full = exact_body.to(full_dtype) - body_input.to(full_dtype)
+            expected_probe = (
+                probe_feature.to(probe_dtype) - body_input.to(probe_dtype)
+            )
+            wrong_full = exact_body.to(full_dtype) - probe_feature.to(full_dtype)
             anchor_checks.append(torch.equal(anchor.full_residual, expected_full))
             probe_anchor_checks.append(torch.equal(anchor.probe_residual, expected_probe))
             stream_key = str(stream_id)

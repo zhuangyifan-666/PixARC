@@ -82,11 +82,14 @@ class TaylorSeerJiT(UpstreamJiT):
         y_emb = self.y_embedder(y)
         c = t_emb + y_emb
         x = self.x_embedder(x)
-        x = x + self.pos_embed
+        body_dtype = x.dtype
+        x += self.pos_embed
+        if x.dtype != body_dtype:
+            raise TypeError("position addition changed JiT body token dtype")
         for layer_idx, block in enumerate(self.blocks):
             if self.in_context_len > 0 and layer_idx == self.in_context_start:
                 context = y_emb.unsqueeze(1).repeat(1, self.in_context_len, 1)
-                context = context + self.in_context_posemb
+                context += self.in_context_posemb
                 x = torch.cat([context, x], dim=1)
             rope = (
                 self.feat_rope

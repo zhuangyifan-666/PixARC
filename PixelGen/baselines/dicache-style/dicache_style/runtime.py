@@ -505,7 +505,9 @@ class DiCacheRuntime:
         _, state = self._require_open_stream(decision.stream_id)
         if not len(state.anchors):
             raise RuntimeError("shadow reuse lacks a counterfactual exact anchor")
-        exact_residual = exact_body_output - body_input
+        exact_residual, _ = self._body_residuals(
+            body_input, probe_feature, exact_body_output
+        )
         denominator = exact_residual.abs().mean()
         zero = state.anchors.latest.full_residual
         zero_error = (zero - exact_residual).abs().mean() / denominator
@@ -605,7 +607,9 @@ class DiCacheRuntime:
             and not shadow_force_full
         )
         if self.mode == "probe_shadow_full":
-            exact_residual = exact_body_output - body_input
+            exact_residual, _ = self._body_residuals(
+                body_input, probe_feature, exact_body_output
+            )
             previous_actual = self._shadow_previous_actual_residuals.get(plan.stream_id)
             actual_change: float | None = None
             if previous_actual is not None:
@@ -629,11 +633,9 @@ class DiCacheRuntime:
             state.previous_body_input = body_input.detach().clone()
             state.previous_probe_feature = probe_feature.detach().clone()
             if not shadow_reuse:
-                full_residual = exact_body_output - body_input
-                probe_residual = probe_feature - body_input
-                if self.cache_dtype == "fp32":
-                    full_residual = full_residual.float()
-                    probe_residual = probe_residual.float()
+                full_residual, probe_residual = self._body_residuals(
+                    body_input, probe_feature, exact_body_output
+                )
                 state.anchors.append_exact(
                     full_residual=full_residual.detach(),
                     probe_residual=probe_residual.detach(),
@@ -678,10 +680,9 @@ class DiCacheRuntime:
         if decision.action != REUSE:
             raise RuntimeError("cannot complete REUSE for a Full decision")
         _, state = self._require_open_stream(decision.stream_id)
-        validated_output = result.approximated_body_output
-        if self.cache_dtype == "fp32":
-            validated_output = validated_output.to(body_input.dtype)
-        self._validate_body_triplet(body_input, probe_feature, validated_output)
+        self._validate_body_triplet(
+            body_input, probe_feature, result.approximated_body_output
+        )
         before = len(state.anchors)
         state.previous_body_input = body_input.detach().clone()
         state.previous_probe_feature = probe_feature.detach().clone()
@@ -1042,8 +1043,40 @@ class DiCacheRuntime:
             raise ValueError("body/probe/output shapes must match")
         if not (body_input.device == probe_feature.device == body_output.device):
             raise ValueError("body/probe/output devices must match")
-        if not (body_input.dtype == probe_feature.dtype == body_output.dtype):
-            raise ValueError("body/probe/output dtypes must match")
+        if not all(
+            tensor.is_floating_point()
+            for tensor in (body_input, probe_feature, body_output)
+        ):
+            raise ValueError("body/probe/output tensors must be floating point")
+
+    def _body_residuals(
+        self,
+        body_input: torch.Tensor,
+        probe_feature: torch.Tensor,
+        body_output: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build both residual anchors in one explicit cache dtype.
+
+        PixelGen's upstream context insertion can promote the post-context
+        suffix to FP32 under BF16 autocast while the image-token input and an
+        early probe remain BF16. ``inherit`` therefore uses the promoted dtype;
+        the explicit ``fp32`` cache policy continues to force FP32.
+        """
+
+        self._validate_body_triplet(body_input, probe_feature, body_output)
+        residual_dtype = torch.float32
+        if self.cache_dtype != "fp32":
+            residual_dtype = torch.promote_types(
+                body_input.dtype, probe_feature.dtype
+            )
+            residual_dtype = torch.promote_types(
+                residual_dtype, body_output.dtype
+            )
+        base = body_input.to(dtype=residual_dtype)
+        return (
+            body_output.to(dtype=residual_dtype) - base,
+            probe_feature.to(dtype=residual_dtype) - base,
+        )
 
     def _require_trajectory(self) -> DiCacheTrajectoryState:
         if self.trajectory is None:

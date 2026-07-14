@@ -139,6 +139,9 @@ root = Path(os.environ["BASE"])
 out = Path(os.environ["SMOKE_CONFIG_DIR"])
 def set_ts(cfg, mode, interval, order, trace):
     cfg["checkpoint"] = os.environ["CHECKPOINT"]
+    cfg["runtime"]["batch_size"] = 2
+    cfg["data"]["train_batch_size"] = 2
+    cfg["data"]["pred_batch_size"] = 2
     cfg["taylorseer"].update(mode=mode, interval=interval, max_order=order, trace_mode=trace)
     args = cfg["model"]["denoiser"]["init_args"]
     args.update(taylorseer_mode=mode, taylorseer_interval=interval,

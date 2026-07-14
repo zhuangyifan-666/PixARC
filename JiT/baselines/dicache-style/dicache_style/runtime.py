@@ -466,11 +466,9 @@ class DiCacheRuntime:
         if self.mode != "instrumented_full":
             state.previous_body_input = body_input.detach().clone()
             state.previous_probe_feature = probe_feature.detach().clone()
-            full_residual = exact_body_output - body_input
-            probe_residual = probe_feature - body_input
-            if self.cache_dtype == "fp32":
-                full_residual = full_residual.float()
-                probe_residual = probe_residual.float()
+            full_residual, probe_residual = self._body_residuals(
+                body_input, probe_feature, exact_body_output
+            )
             if self.mode == "probe_shadow_full":
                 previous_actual = self._shadow_previous_actual_residuals.get(
                     plan.stream_id
@@ -826,8 +824,34 @@ class DiCacheRuntime:
             raise ValueError("body/probe/output shapes must match")
         if not (body_input.device == probe_feature.device == body_output.device):
             raise ValueError("body/probe/output devices must match")
-        if not (body_input.dtype == probe_feature.dtype == body_output.dtype):
-            raise ValueError("body/probe/output dtypes must match")
+        if not all(
+            tensor.is_floating_point()
+            for tensor in (body_input, probe_feature, body_output)
+        ):
+            raise ValueError("body/probe/output tensors must be floating point")
+
+    def _body_residuals(
+        self,
+        body_input: torch.Tensor,
+        probe_feature: torch.Tensor,
+        body_output: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build both residual anchors in one explicit cache dtype."""
+
+        self._validate_body_triplet(body_input, probe_feature, body_output)
+        residual_dtype = torch.float32
+        if self.cache_dtype != "fp32":
+            residual_dtype = torch.promote_types(
+                body_input.dtype, probe_feature.dtype
+            )
+            residual_dtype = torch.promote_types(
+                residual_dtype, body_output.dtype
+            )
+        base = body_input.to(dtype=residual_dtype)
+        return (
+            body_output.to(dtype=residual_dtype) - base,
+            probe_feature.to(dtype=residual_dtype) - base,
+        )
 
     def _require_trajectory(self) -> DiCacheTrajectoryState:
         if self.trajectory is None:

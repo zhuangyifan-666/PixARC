@@ -68,11 +68,12 @@ python "$SCRIPT_ROOT/deferred_run_guard.py" \
   --config "$CANDIDATE_CONFIG" --manifest "$MANIFEST" --max-records 8 \
   --require-mode dicache
 
-FIRST_RECORD="$(python -c 'import json,sys; row=json.loads(next(line for line in open(sys.argv[1], encoding="utf-8") if line.strip())); print(f"{row['"'"'sample_id'"'"']}\t{row['"'"'seed'"'"']}\t{row['"'"'class_id'"'"']}")' "$MANIFEST")"
-IFS=$'\t' read -r FIRST_SAMPLE_ID FIRST_SEED FIRST_CLASS_ID <<<"$FIRST_RECORD"
+FIRST_RECORD="$(python -c 'import json,sys; row=json.loads(next(line for line in open(sys.argv[1], encoding="utf-8") if line.strip())); print(f"{row['"'"'sample_id'"'"']}\t{row['"'"'seed'"'"']}\t{row['"'"'class_id'"'"']}\t{row['"'"'batch_group_id'"'"']}")' "$MANIFEST")"
+IFS=$'\t' read -r FIRST_SAMPLE_ID FIRST_SEED FIRST_CLASS_ID FIRST_BATCH_GROUP_ID <<<"$FIRST_RECORD"
 python "$SCRIPT_ROOT/run_gpu_model_parity.py" \
   --model-config "$CANDIDATE_CONFIG" \
   --sample-id "$FIRST_SAMPLE_ID" --seed "$FIRST_SEED" --class-id "$FIRST_CLASS_ID" \
+  --manifest "$MANIFEST" --batch-group-id "$FIRST_BATCH_GROUP_ID" \
   --output-json "$OUTPUT_ROOT/tensor_upstream_scratch_vs_probe_resume_parity.json"
 
 DICACHE_INVOCATION_ID="smoke-upstream-$(date +%s%N)" \

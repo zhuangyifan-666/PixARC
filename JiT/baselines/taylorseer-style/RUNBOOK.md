@@ -140,9 +140,11 @@ for name in ("upstream_full", "instrumented_full"):
     src = root / "configs" / f"jit_b16_256_{name}.yaml"
     cfg = yaml.safe_load(src.read_text(encoding="utf-8"))
     cfg["model"]["checkpoint"] = os.environ["CHECKPOINT"]
+    cfg["runtime"]["batch_size"] = 2
     (out/f"{name}.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 base = yaml.safe_load((root/"configs/jit_b16_256_taylorseer.yaml").read_text(encoding="utf-8"))
 base["model"]["checkpoint"] = os.environ["CHECKPOINT"]
+base["runtime"]["batch_size"] = 2
 for name, mode, interval, order, trace in (
     ("interval1", "taylorseer", 1, 4, "full"),
     ("reuse_diagnostic", "taylorseer", 2, 1, "full"),

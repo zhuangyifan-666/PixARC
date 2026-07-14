@@ -136,6 +136,9 @@ for destination, mode, threshold in (
 ):
     config = copy.deepcopy(base)
     config["checkpoint"] = os.environ["CHECKPOINT"]
+    config["runtime"]["batch_size"] = 4
+    config["data"]["train_batch_size"] = 4
+    config["data"]["pred_batch_size"] = 4
     config["seacache"].update(mode=mode, threshold=threshold)
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)

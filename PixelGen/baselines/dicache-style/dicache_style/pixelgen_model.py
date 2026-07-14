@@ -152,7 +152,7 @@ class DiCachePixelGenJiT(_UpstreamJiT):
             if context_inserted:
                 raise RuntimeError("context tokens would be inserted twice")
             context = y_emb.unsqueeze(1).repeat(1, self.in_context_len, 1)
-            context = context + self.in_context_posemb
+            context += self.in_context_posemb
             return torch.cat([context, x], dim=1), True
         return x, context_inserted
 
@@ -317,7 +317,10 @@ class DiCachePixelGenJiT(_UpstreamJiT):
         y_emb = self.y_embedder(y)
         condition = t_emb + y_emb
         body_input = self.x_embedder(x)
-        body_input = body_input + self.pos_embed
+        embedded_dtype = body_input.dtype
+        body_input += self.pos_embed
+        if body_input.dtype != embedded_dtype:
+            raise TypeError("position addition changed PixelGen body token dtype")
         plan = runtime.plan_stream_call(
             stream_id,
             body_input,
