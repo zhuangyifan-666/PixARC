@@ -16,6 +16,8 @@ from dicache_style.source_identity import release_source_bindings
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_FAMILY = ROOT.parents[1].name
+TARGET_BATCH_SIZE = 32 if MODEL_FAMILY == "JiT" else 4
+TARGET_EFFECTIVE_CFG_BATCH_SIZE = 2 * TARGET_BATCH_SIZE
 RECORD = ROOT / "scripts" / "record_selection.py"
 DECISION = ROOT / "scripts" / "record_selection_decision.py"
 SMOKE = ROOT / "scripts" / "record_smoke_gate.py"
@@ -141,7 +143,7 @@ def _decision_report(tmp_path: Path) -> Path:
         },
     )
     protocol = {
-        "batch_size": 1,
+        "batch_size": TARGET_BATCH_SIZE,
         "compile_mode": "matched_eager",
         "input_config": str(config_path.resolve()),
         "input_config_hash": config_hash,
@@ -405,7 +407,7 @@ def _compile_report(
                 "protocol": {
                     "compile_mode": compile_mode,
                     "input_config_hash": candidate_hash,
-                    "batch_size": 1,
+                    "batch_size": TARGET_BATCH_SIZE,
                 },
                 "roles": {role: {"passed": True} for role in roles},
             }
@@ -495,8 +497,8 @@ def _compile_report(
         "source_mismatches": {},
         "protocol": {"row_order": list(rows)},
         "identity": {
-            "batch_size": 1,
-            "effective_cfg_batch_size": 2,
+            "batch_size": TARGET_BATCH_SIZE,
+            "effective_cfg_batch_size": TARGET_EFFECTIVE_CFG_BATCH_SIZE,
             "checkpoint_sha256": _sha256(
                 Path(yaml.safe_load(candidate_config.read_text(encoding="utf-8"))["checkpoint"])
             ),
@@ -527,7 +529,7 @@ def _release_fixture(tmp_path: Path) -> dict[str, Path]:
         "model_family": MODEL_FAMILY,
         "profile": "flux_image_released",
         "probe_depth": 1,
-        "batch_size": 1,
+        "batch_size": TARGET_BATCH_SIZE,
         "rel_l1_thresh": None,
         "gamma_nonfinite_policy": "force_full",
         "final_50k_used_for_selection": False,
@@ -538,7 +540,7 @@ def _release_fixture(tmp_path: Path) -> dict[str, Path]:
     checkpoint.write_bytes(b"checkpoint")
     base = {
         "schema_version": "pixarc-dicache-config-v1",
-        "runtime": {"batch_size": 1, "compile_mode": "matched_eager"},
+        "runtime": {"batch_size": TARGET_BATCH_SIZE, "compile_mode": "matched_eager"},
     }
     if MODEL_FAMILY == "JiT":
         base["model"] = {
@@ -554,10 +556,10 @@ def _release_fixture(tmp_path: Path) -> dict[str, Path]:
         }
     else:
         base["runtime"].update(
-            {"effective_cfg_batch_size": 2, "precision": "bf16-mixed"}
+            {"effective_cfg_batch_size": TARGET_EFFECTIVE_CFG_BATCH_SIZE, "precision": "bf16-mixed"}
         )
         base["trainer"] = {"precision": "bf16-mixed"}
-        base["data"] = {"pred_batch_size": 1}
+        base["data"] = {"pred_batch_size": TARGET_BATCH_SIZE}
         base["checkpoint"] = str(checkpoint.resolve())
         base["model"] = {
             "vae": {"class_path": "PixelAE", "init_args": {}},
@@ -678,7 +680,8 @@ def test_selected_report_is_explicit_and_final_50k_independent(tmp_path: Path):
     assert report["status"] == "selected"
     assert report["model_family"] == MODEL_FAMILY
     assert report["profile"] == "flux_image_released"
-    assert report["probe_depth"] == report["batch_size"] == 1
+    assert report["probe_depth"] == 1
+    assert report["batch_size"] == TARGET_BATCH_SIZE
     assert report["final_50k_used_for_selection"] is False
     assert report["decision"]["passed"] is True
 
@@ -1117,7 +1120,7 @@ def test_release_gate_rejects_final_dtype_or_batch_protocol_drift(tmp_path: Path
         expected = "sampling protocols must match"
     else:
         candidate["runtime"]["effective_cfg_batch_size"] = 4
-        expected = "effective_cfg_batch_size must be 2"
+        expected = "effective_cfg_batch_size must be 8"
     paths["candidate"].write_text(yaml.safe_dump(candidate), encoding="utf-8")
     rejected = _create_gate(paths)
     assert rejected.returncode != 0

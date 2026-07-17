@@ -1,0 +1,116 @@
+schema_version: pixarc-speca-config-v1
+checkpoint: /mnt/iset/nfs-main/private/zhuangyifan/PixARC/PixelGen/checkpoints/PixelGen_XL_160ep.ckpt
+speca:
+  mode: speca
+  scheduler_mode: released_code_faithful
+  max_order: 4
+  base_threshold: 0.4
+  decay_rate: 0.05
+  min_taylor_steps: 3
+  max_taylor_steps: 8
+  first_enhance: 3
+  threshold_floor: 0.01
+  error_metric: relative_l1
+  error_eps: 1.0e-10
+  verify_layer: -1
+  verification_token_scope: all_tokens
+  gate_mode: batch_global
+  coordinate_mode: official_nfe_index
+  force_last_full: false
+  cache_dtype: inherit
+  trace_mode: summary
+  interval: null
+runtime:
+  batch_size: 4
+  effective_cfg_batch_size: 8
+  precision: bf16-mixed
+  compile_mode: matched_eager
+  num_workers: 1
+  noise_scale: 1.0
+seed_everything: 1234
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: bf16-mixed
+  logger: false
+  inference_mode: true
+  use_distributed_sampler: false
+model:
+  compile_mode: matched_eager
+  vae:
+    class_path: src.models.autoencoder.pixel.PixelAE
+    init_args:
+      scale: 1.0
+  denoiser:
+    class_path: speca_style.pixelgen_model.SpeCaPixelGenJiT
+    init_args:
+      input_size: 256
+      patch_size: 16
+      in_channels: 3
+      hidden_size: 1152
+      depth: 28
+      num_heads: 16
+      mlp_ratio: 4.0
+      attn_drop: 0.0
+      proj_drop: 0.1
+      num_classes: 1000
+      use_bottleneck: false
+      in_context_len: 32
+      in_context_start: 8
+      speca_mode: speca
+      speca_max_order: 4
+      speca_base_threshold: 0.4
+      speca_decay_rate: 0.05
+      speca_min_taylor_steps: 3
+      speca_max_taylor_steps: 8
+      speca_first_enhance: 3
+      speca_threshold_floor: 0.01
+      speca_error_metric: relative_l1
+      speca_error_eps: 1.0e-10
+      speca_verify_layer: -1
+      speca_verification_token_scope: all_tokens
+      speca_gate_mode: batch_global
+      speca_coordinate_mode: official_nfe_index
+      speca_force_last_full: false
+      speca_cache_dtype: inherit
+      speca_trace_mode: summary
+      speca_interval: null
+      compile_mode: matched_eager
+  conditioner:
+    class_path: src.models.conditioner.class_label.LabelConditioner
+    init_args:
+      num_classes: 1000
+  diffusion_trainer:
+    class_path: speca_style.pixelgen_lightning.InferenceOnlyTrainer
+    init_args: {}
+  diffusion_sampler:
+    class_path: speca_style.pixelgen_sampler.SpeCaHeunSamplerJiT
+    init_args:
+      exact_henu: true
+      num_steps: 50
+      guidance: 2.25
+      timeshift: 2.0
+      guidance_interval_min: 0.1
+      guidance_interval_max: 0.9
+      scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
+      w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
+      guidance_fn: src.diffusion.base.guidance.simple_guidance_fn
+      step_fn: src.diffusion.flow_matching.sampling.ode_step_fn
+  ema_tracker:
+    class_path: src.callbacks.simple_ema.SimpleEMA
+    init_args:
+      decay: 0.9999
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 0.0001
+      weight_decay: 0.0
+data:
+  train_dataset: null
+  eval_dataset: null
+  pred_dataset: null
+  train_batch_size: 4
+  train_num_workers: 1
+  pred_batch_size: 4
+  pred_num_workers: 1

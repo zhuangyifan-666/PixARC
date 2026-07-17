@@ -1,5 +1,7 @@
 # PixelGen Full-reference compatibility
 
+> Protocol update (2026-07-14): active SpeCa and matched Full runs use real batch 4/effective CFG batch 8. Legacy outputs remain blocked unless immutable batch-4 manifest/noise/group identities match; the former batch-4-versus-batch-1 mismatch is no longer the design target.
+
 ## Decision
 
 **`PAIRED_METRICS_BLOCKED`** for the registered SpeCa main protocol.
@@ -29,4 +31,3 @@ After its own integrity validation, the old Full output may support unpaired FID
 Under later GPU authorization, generate an immutable batch-1 manifest and run `instrumented_full` and `speca` with identical checkpoint, EMA, exact-Heun sampler, steps, CFG/timeshift, dtype, compile mode, explicit per-sample noise, combined CFG order, postprocessing, and one-sample groups. Preserve config/manifest/checkpoint hashes and run metadata. Only a mechanically accepted pair may enter strict metrics.
 
 Primary speedup uses matched `instrumented_full`, not the existing Full wall clock, because SpeCa runs the local split block path and both sides must share compile/path conditions.
-

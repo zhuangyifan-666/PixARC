@@ -291,8 +291,8 @@ def main() -> None:
         raise ValueError("runtime batch sizes must be integers")
     batch_size = batch_size_raw
     effective_cfg_batch_size = effective_cfg_batch_size_raw
-    if batch_size != 1 or effective_cfg_batch_size != 2:
-        raise ValueError("primary PixelGen runs require real batch=1 and CFG batch=2")
+    if batch_size != 4 or effective_cfg_batch_size != 8:
+        raise ValueError("primary PixelGen runs require real batch=4 and CFG batch=8")
     records = load_manifest(manifest_path)
     if args.nonfinal_proxy:
         if len(records) >= 50000:
@@ -418,6 +418,7 @@ def main() -> None:
         checkpoint_path=str(checkpoint),
         checkpoint_size=int(checkpoint_info["checkpoint_size"]),
         method=str(dicache["mode"]),
+        protocol_batch_size=batch_size,
         resolution=resolution,
     )
 

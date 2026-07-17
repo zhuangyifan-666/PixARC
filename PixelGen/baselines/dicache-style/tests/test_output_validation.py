@@ -89,6 +89,98 @@ def test_validate_outputs_accepts_bound_finite_trajectory(tmp_path: Path):
     assert report["release_gate_sha256"] == "unreleased"
 
 
+def test_validate_outputs_accepts_protocol_batch_with_short_final_trajectory(
+    tmp_path: Path,
+):
+    records = build_manifest(
+        samples_per_class=1,
+        base_seed=20,
+        split_name="short-final-group",
+        world_size=1,
+        batch_size=4,
+        num_classes=6,
+    )
+    sample_dir = tmp_path / "samples"
+    config = yaml.safe_load(
+        (ROOT / "configs" / "pixelgen_xl_256_instrumented_full.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    groups: dict[str, list[int]] = {}
+    for record in records:
+        groups.setdefault(record.batch_group_id, []).append(record.sample_id)
+        atomic_write_png(
+            np.zeros((4, 4, 3), dtype=np.uint8),
+            sample_dir / f"{record.sample_id:06d}.png",
+            resolution=4,
+        )
+    metadata = {}
+    for record in records:
+        sample_ids = groups[record.batch_group_id]
+        actual_batch_size = len(sample_ids)
+        metadata[record.sample_id] = {
+            "sample_id": record.sample_id,
+            "class_id": record.class_id,
+            "seed": record.seed,
+            "batch_group_id": record.batch_group_id,
+            "position_in_batch": record.position_in_batch,
+            "status": "ok",
+            "config_hash": "config",
+            "dicache_config_hash": "dicache",
+            "release_gate_sha256": "unreleased",
+            "checkpoint_path": "/checkpoint",
+            "checkpoint_size": 1,
+            "manifest_sha256": "manifest",
+            "method": "instrumented_full",
+            "real_batch_size": 4,
+            "effective_cfg_batch_size": 8,
+            "trajectory_id": f"group-{record.batch_group_id}",
+            "trajectory_sample_ids": sample_ids,
+            "trajectory_real_batch_size": actual_batch_size,
+            "trajectory_effective_cfg_batch_size": 2 * actual_batch_size,
+            "trajectory_call_count_valid": True,
+            "trajectory_total_nfe": 1,
+            "trajectory_total_stream_calls": 1,
+            "trajectory_direct_full_count": 1,
+            "trajectory_resumed_full_count": 0,
+            "trajectory_reuse_count": 0,
+            "trajectory_network_forward_count": 1,
+            "trajectory_expected_network_forward_count": 1,
+            "trajectory_mean_delta_y": None,
+            **{
+                field: config["dicache"][field]
+                for field in DICACHE_CONFIG_FIELDS
+            },
+        }
+
+    report = validate_outputs(
+        sample_dir,
+        records,
+        metadata=metadata,
+        expected_count=6,
+        expected_per_class=1,
+        expected_num_classes=6,
+        resolution=4,
+    )
+    assert report["real_batch_size"] == 4
+    assert report["effective_cfg_batch_size"] == 8
+
+    partial_group = groups[records[-1].batch_group_id]
+    bad = deepcopy(metadata)
+    for sample_id in partial_group:
+        bad[sample_id]["trajectory_effective_cfg_batch_size"] = 8
+    with pytest.raises(ValueError, match="trajectory_effective_cfg_batch_size"):
+        validate_outputs(
+            sample_dir,
+            records,
+            metadata=bad,
+            expected_count=6,
+            expected_per_class=1,
+            expected_num_classes=6,
+            resolution=4,
+        )
+
+
 def test_validate_outputs_requires_release_prefix_identity(tmp_path: Path):
     sample_dir, records, metadata = _fixture(tmp_path)
     metadata[0].pop("release_gate_sha256")

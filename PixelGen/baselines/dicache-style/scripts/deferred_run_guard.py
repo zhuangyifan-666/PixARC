@@ -70,10 +70,10 @@ def main() -> None:
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("runtime.batch_size must be a positive integer")
     effective_cfg_batch_size = runtime.get("effective_cfg_batch_size")
-    if batch_size != 1 or effective_cfg_batch_size != 2:
+    if batch_size != 4 or effective_cfg_batch_size != 8:
         raise ValueError(
-            "primary PixelGen DiCache runs require runtime.batch_size=1 and "
-            "runtime.effective_cfg_batch_size=2"
+            "primary PixelGen DiCache runs require runtime.batch_size=4 and "
+            "runtime.effective_cfg_batch_size=8"
         )
     records = load_manifest(arguments.manifest.resolve(strict=True))
     if len(records) > arguments.max_records:
@@ -111,4 +111,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

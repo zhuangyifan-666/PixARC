@@ -19,7 +19,7 @@ fixed:
   force_last_full: false
   cache_dtype: inherit
   compile_mode: matched_eager
-  real_batch_size: 1
+  real_batch_size: 32
 selection:
   final_50k_may_not_be_used_for_selection: true
   compare_at_measured_latency_or_speedup: true

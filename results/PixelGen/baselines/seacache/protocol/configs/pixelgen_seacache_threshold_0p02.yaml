@@ -1,0 +1,78 @@
+checkpoint: /mnt/iset/nfs-main/private/zhuangyifan/PixARC/PixelGen/checkpoints/PixelGen_XL_160ep.ckpt
+seacache:
+  mode: seacache
+  threshold: 0.02
+  trace_mode: summary
+runtime:
+  batch_size: 4
+  precision: bf16-mixed
+  compile_mode: matched_eager
+  num_workers: 1
+  noise_scale: 1.0
+seed_everything: 1234
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: bf16-mixed
+  logger: false
+  inference_mode: true
+  use_distributed_sampler: false
+model:
+  vae:
+    class_path: src.models.autoencoder.pixel.PixelAE
+    init_args:
+      scale: 1.0
+  denoiser:
+    class_path: seacache_style.pixelgen_model.SeaCacheJiT
+    init_args:
+      input_size: 256
+      patch_size: 16
+      in_channels: 3
+      hidden_size: 1152
+      depth: 28
+      num_heads: 16
+      mlp_ratio: 4.0
+      attn_drop: 0.0
+      proj_drop: 0.1
+      num_classes: 1000
+      use_bottleneck: false
+      in_context_len: 32
+      in_context_start: 8
+  conditioner:
+    class_path: src.models.conditioner.class_label.LabelConditioner
+    init_args:
+      num_classes: 1000
+  diffusion_trainer:
+    class_path: seacache_style.pixelgen_lightning.InferenceOnlyTrainer
+    init_args: {}
+  diffusion_sampler:
+    class_path: seacache_style.pixelgen_sampler.SeaCacheHeunSamplerJiT
+    init_args:
+      exact_henu: true
+      num_steps: 50
+      guidance: 2.25
+      timeshift: 2.0
+      guidance_interval_min: 0.1
+      guidance_interval_max: 0.9
+      scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
+      w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
+      guidance_fn: src.diffusion.base.guidance.simple_guidance_fn
+      step_fn: src.diffusion.flow_matching.sampling.ode_step_fn
+  ema_tracker:
+    class_path: src.callbacks.simple_ema.SimpleEMA
+    init_args:
+      decay: 0.9999
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 0.0001
+      weight_decay: 0.0
+data:
+  train_dataset: null
+  eval_dataset: null
+  pred_dataset: null
+  train_batch_size: 4
+  train_num_workers: 1
+  pred_batch_size: 4
+  pred_num_workers: 1

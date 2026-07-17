@@ -55,13 +55,13 @@ Saved RGB uint8 PNGs are converted to float32 `[0,1]`:
 The per-sample CSV includes sample/class/seed, all three scores, and both
 paths. If LPIPS or its already-local weights are unavailable, the LPIPS test
 is explicitly skipped/failed as configured; no alternative backbone and no
-network download is allowed. The current queued JiT reference is blocked for
-strict paired metrics pending a matched batch-1 replay; see
+network download is allowed. Legacy JiT references are blocked for strict
+paired metrics pending a manifest-matched batch-32 replay; see
 `BASELINE_COMPATIBILITY_REPORT.md`.
 
 ## Performance
 
-Single-image latency, common-batch throughput, and four-GPU 50K wall clock are
+Batch-32 per-image latency, throughput, and four-GPU 50K wall clock are
 different metrics and must be reported separately. Primary `speedup` uses
 matched compile modes and median per-image latency. See
 `COMPILE_COMPATIBILITY.md` and `MEMORY_REPORT.md`.

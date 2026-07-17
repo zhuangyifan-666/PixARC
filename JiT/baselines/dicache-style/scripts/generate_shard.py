@@ -85,7 +85,7 @@ def _verify_worker_release(
         raise RuntimeError("worker release-gate verifier returned a different digest")
     return report
 
-# These are stored once per trajectory (once per row for the main batch-1
+# These are stored once per trajectory (once per row for the main batch-32
 # protocol).  They are deliberately scalar: 50K runs never persist features.
 _SUMMARY_INT_FIELDS = (
     "total_nfe",
@@ -267,6 +267,8 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[dict[str, Any], dict[st
     batch_size = runtime.get("batch_size")
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("runtime.batch_size must be a positive integer")
+    if batch_size != 32:
+        raise ValueError("primary JiT DiCache runs require runtime.batch_size=32")
     compile_mode = str(runtime.get("compile_mode", "matched_eager"))
     if compile_mode not in {"upstream", "matched_eager", "blockwise"}:
         raise ValueError("unsupported runtime.compile_mode")

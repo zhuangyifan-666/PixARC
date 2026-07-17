@@ -3,15 +3,15 @@
 ## Registered main protocol
 
 ```text
-real generation batch per GPU process = 1
-conditional model batch               = 1
-unconditional model batch             = 1
-effective CFG samples per NFE          = 2, executed as two forwards
+real generation batch per GPU process = 32
+conditional model batch               = 32
+unconditional model batch             = 32
+effective CFG samples per NFE          = 64, executed as two forwards
 gate_mode                              = batch_global
-manifest batch grouping                = one real sample per group
+manifest batch grouping                = 32 real samples per group
 ```
 
-The released error reduces an entire input batch to one scalar. Real batch 1 is therefore required to support a sample-adaptive interpretation without inventing per-sample ragged scheduling. It is also part of strict Full/SpeCa noise replay and cannot be changed after a manifest is frozen.
+The released error reduces an entire input batch to one scalar. Under the unified baseline protocol, one action covers the fixed group of 32 real samples in each branch. This is a grouped-batch rather than sample-adaptive interpretation; its grouping and threshold are frozen parts of strict Full/SpeCa replay.
 
 ## One scheduler, two histories
 
@@ -25,15 +25,13 @@ Each NFE has exactly one decision and two stream executions:
 
 It is invalid to share factor tensors, increment after the conditional call, use different actions or coordinates, verify one stream only, average incompatible already-reduced scalars, or create two schedulers.
 
-## Batch larger than one
+## Fixed grouped-batch execution
 
-A real batch larger than one is permitted only as a separately named **grouped-batch SpeCa** experiment. Its single error/action covers multiple real samples; it is not strictly sample-adaptive. Such a run requires a separately generated immutable manifest, fixed grouping/order, independently tuned thresholds, its own memory/latency report, and no mixing with batch-1 main results.
-
-Changing only the runtime batch against a batch-1 manifest is rejected. Resume also preserves the original batch groups, while per-sample explicit noise makes output independent of rank execution order.
+The main experiment is **grouped-batch SpeCa** at batch 32. Its single error/action covers multiple real samples and is not described as sample-adaptive. Changing runtime batch or regrouping a frozen manifest is rejected. Resume preserves the original groups, while per-sample explicit noise makes output independent of rank execution order.
 
 ## Fairness consequences
 
-- Both matched Full and SpeCa paired runs use real batch 1 and the identical manifest.
+- Both matched Full and SpeCa paired runs use real batch 32 and the identical manifest.
 - PixelGen's combined `2B` arrangement is not numerically the same execution layout as JiT's two forwards; results are reported per model family, not cross-divided.
-- Common-batch throughput can be reported separately, but it does not replace batch-1 latency or four-GPU 50K wall time.
-- The existing JiT Full batch-32 reference is `PAIRED_METRICS_BLOCKED` for this protocol; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).
+- Primary timing reports batch-32 per-image latency and throughput alongside four-GPU 50K wall time.
+- Legacy Full outputs without immutable batch-32 replay evidence remain `PAIRED_METRICS_BLOCKED`; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).

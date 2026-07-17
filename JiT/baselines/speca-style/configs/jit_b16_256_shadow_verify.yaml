@@ -34,4 +34,4 @@ speca:
   force_last_full: false
   cache_dtype: inherit
   trace_mode: shadow
-runtime: {batch_size: 1, compile_mode: matched_eager}
+runtime: {batch_size: 32, compile_mode: matched_eager}

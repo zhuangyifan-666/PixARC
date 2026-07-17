@@ -228,6 +228,7 @@ def main() -> None:
     spec = build_benchmark_spec(
         {
             "model_config": arguments.model_config,
+            "purpose": "model_parity",
             "batch_size": 1,
             "sample_ids": [arguments.sample_id],
             "seeds": [arguments.seed],

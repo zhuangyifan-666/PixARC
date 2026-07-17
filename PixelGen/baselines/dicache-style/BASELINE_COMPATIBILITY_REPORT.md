@@ -1,5 +1,7 @@
 # PixelGen Full-reference compatibility
 
+> Protocol update (2026-07-14): active PixelGen DiCache and matched Full runs use real batch 4/effective CFG batch 8. Legacy outputs remain blocked unless immutable batch-4 manifest/noise/group identities match; the former batch-4-versus-batch-1 mismatch is no longer the design target.
+
 ## Decision
 
 `PAIRED_METRICS_BLOCKED` for the main DiCache protocol.
@@ -19,4 +21,3 @@ The current PixelGen Full reference used real batch 4 and a continuous distribut
 After validating its own completeness, the old Full output may be used for unpaired FID, sFID, IS, precision, and recall. It must not be used for PSNR, SSIM, or LPIPS against new DiCache output, and files must not be paired post hoc by numeric order.
 
 A new matched Full must be generated from the same immutable batch-1 manifest using `instrumented_full`, then compared to `dicache`. Primary speedup also uses `instrumented_full` with identical local split-body path and compile mode; an upstream-compiled Full may be reported separately but is not the main denominator.
-

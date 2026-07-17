@@ -1,5 +1,7 @@
 # SpeCa-style PixelGen audit
 
+> Protocol update (2026-07-14): PixARC's unified primary experiment now uses real batch 4/effective CFG batch 8 for every PixelGen baseline. Historical batch-1 observations below describe the original port audit, not the active experiment protocol. SpeCa must be retuned under grouped batch 4.
+
 This audit is pinned to the local checkout. Internet state is not an implementation source.
 
 ## Revisions and provenance
@@ -47,4 +49,3 @@ Both use `first_enhance=3` and threshold floor `0.01`. `sample.py` accesses an u
 The initial 2026-07-13 UTC read-only snapshot identified existing PixelGen Full work and JiT Full work/queueing. Process state is ephemeral and is not performance evidence. This pass launched no CUDA context, attached to no process, sent no signal, and wrote no reference output. GPU smoke, compile, LPIPS, FID, latency, memory peaks, tuning, and generation remain explicitly deferred.
 
 No files under Cache4Diffusion, TaylorSeer, `third-party`, SeaCache, or TaylorSeer-style were modified by this port.
-

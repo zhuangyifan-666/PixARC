@@ -177,8 +177,8 @@ def main() -> None:
         raise ValueError("runtime batch sizes must be integers")
     batch_size = batch_size_raw
     effective_cfg_batch_size = effective_cfg_batch_size_raw
-    if batch_size != 1 or effective_cfg_batch_size != 2:
-        raise ValueError("primary PixelGen runs require real batch=1 and CFG batch=2")
+    if batch_size != 4 or effective_cfg_batch_size != 8:
+        raise ValueError("primary PixelGen runs require real batch=4 and CFG batch=8")
     records = load_manifest(args.manifest)
     validate_manifest(
         records,
@@ -276,6 +276,7 @@ def main() -> None:
         interval=speca["interval"],
         max_order=speca["max_order"],
         coordinate_mode=str(speca["coordinate_mode"]),
+        protocol_batch_size=batch_size,
         resolution=resolution,
     )
 

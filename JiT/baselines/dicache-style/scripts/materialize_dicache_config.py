@@ -78,8 +78,8 @@ def main() -> None:
     validate_dicache_config(config["dicache"], require_resolved=True)
     if config["dicache"].get("profile") != "flux_image_released":
         raise ValueError("selection provenance requires profile=flux_image_released")
-    if config.get("runtime", {}).get("batch_size") != 1:
-        raise ValueError("selection provenance requires runtime.batch_size=1")
+    if config.get("runtime", {}).get("batch_size") != 32:
+        raise ValueError("selection provenance requires runtime.batch_size=32")
     selection = validate_selection_report(
         load_json_object(report),
         expected_model_family="JiT",

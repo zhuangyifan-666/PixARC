@@ -1,5 +1,7 @@
 # PixelGen DiCache implementation report
 
+> Protocol update (2026-07-14): the active experiment uses real batch 4/effective CFG batch 8. Batch-1 answers retained below are historical audit context and are superseded for generation, selection, latency, and matched Full comparison.
+
 This report answers the required 49 questions for the PixelGen port. “Verified” means CPU/static verification only unless a GPU stage is named explicitly.
 
 1. **DiCache commit?** `fdbe20b669c9174bbed5ec994de073fd881c8010`.

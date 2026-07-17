@@ -129,8 +129,8 @@ def validate_compile_role_config(
     model = config.get("model")
     if not isinstance(dicache, Mapping) or not isinstance(runtime, Mapping) or not isinstance(model, Mapping):
         raise TypeError("compile config must contain dicache/runtime/model mappings")
-    if runtime.get("batch_size") != 1 or runtime.get("effective_cfg_batch_size") != 2:
-        raise ValueError("compile matrix requires real batch=1 and CFG batch=2")
+    if runtime.get("batch_size") != 4 or runtime.get("effective_cfg_batch_size") != 8:
+        raise ValueError("compile matrix requires real batch=4 and CFG batch=8")
     denoiser = model.get("denoiser")
     if not isinstance(denoiser, Mapping) or not isinstance(denoiser.get("init_args"), Mapping):
         raise TypeError("compile config model.denoiser.init_args must be a mapping")
@@ -261,10 +261,17 @@ def _build_benchmark_spec(
     unwrapped_for_eager = int(getattr(net, "compile_wrappers_unwrapped", 0))
 
     batch_size = int(runner.get("batch_size", runtime["batch_size"]))
-    if int(runtime["batch_size"]) != 1 or int(runtime["effective_cfg_batch_size"]) != 2:
-        raise ValueError("primary PixelGen protocol requires real batch=1 and CFG batch=2")
-    if batch_size != 1:
-        raise ValueError("PixelGen DiCache latency must use real batch_size=1")
+    purpose = str(runner.get("purpose", "latency"))
+    if int(runtime["batch_size"]) != 4 or int(runtime["effective_cfg_batch_size"]) != 8:
+        raise ValueError("primary PixelGen protocol requires real batch=4 and CFG batch=8")
+    if purpose == "latency":
+        if batch_size != 4:
+            raise ValueError("PixelGen DiCache latency must use real batch_size=4")
+    elif purpose == "model_parity":
+        if batch_size != 1:
+            raise ValueError("PixelGen model parity requires one immutable sample")
+    else:
+        raise ValueError(f"unsupported PixelGen benchmark purpose: {purpose}")
     sample_ids = tuple(int(value) for value in runner["sample_ids"])
     seeds = tuple(int(value) for value in runner["seeds"])
     class_ids = tuple(int(value) for value in runner["class_ids"])

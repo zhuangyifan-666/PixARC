@@ -360,8 +360,8 @@ def main() -> None:
         (record for record in records if record.batch_group_id == first_group_id),
         key=lambda record: record.position_in_batch,
     )
-    if len(first_group) != 1:
-        raise ValueError("compile matrix requires manifest batch_size=1")
+    if len(first_group) != 4:
+        raise ValueError("compile matrix requires manifest batch_size=4")
 
     configs: dict[str, Path] = {}
     for role in ROLE_ORDER:

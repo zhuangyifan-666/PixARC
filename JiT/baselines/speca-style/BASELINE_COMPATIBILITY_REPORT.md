@@ -1,5 +1,7 @@
 # JiT Full-reference compatibility
 
+> Protocol update (2026-07-14): active SpeCa and matched Full runs use batch 32. Legacy outputs remain blocked unless immutable batch-32 manifest/noise/group identities match; the former batch-32-versus-batch-1 mismatch is no longer the design target.
+
 ## Decision
 
 **`PAIRED_METRICS_BLOCKED`** for the registered SpeCa main protocol.
@@ -31,4 +33,3 @@ After its own integrity validation, it may be used as an unpaired distribution r
 When GPU work is separately authorized, build an immutable batch-1 manifest and run `instrumented_full` and `speca` with the same checkpoint, EMA, sampler, steps, CFG, timeshift, dtype, compile mode, sample grouping, explicit per-sample noise, and postprocessing. Preserve both resolved configs, manifest and sidecar hashes, checkpoint identity, run metadata, and output validation reports. Only then may strict paired evaluation proceed.
 
 The primary speedup denominator is matched `instrumented_full`, because it uses the same local block path and compile regime as SpeCa. The existing wall-clock Full run is not automatically a valid latency denominator.
-

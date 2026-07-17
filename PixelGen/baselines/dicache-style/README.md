@@ -66,7 +66,7 @@ FLUX warmup preserves its off-by-one condition: `call_index <= int(ret_ratio * t
 
 Upstream PixelGen concatenates `[unconditional, conditional]` and performs one effective-2B forward. This port preserves one forward, one explicit `combined_cfg` stream, one action, one accumulator, and one anchor window. It never splits CFG or allows the halves to choose different residuals. This differs from WAN’s two independent calls.
 
-The main protocol is real batch 1/effective CFG batch 2. At B>1, all B samples share the batch-global action and gamma; such runs are `grouped_batch`, not strictly sample-adaptive. Batch size and fixed grouping affect the threshold and must match Full.
+The main protocol is real batch 4/effective CFG batch 8. All four samples share the batch-global action and gamma; this is a `grouped_batch`, not strictly sample-adaptive, protocol. Batch size and fixed grouping affect the threshold and must match Full.
 
 With exact Heun and N macro steps, the adapter records predictor/corrector evaluations independently and derives `2N-1` NFEs. At 50 steps there are 99 combined network forwards, not 50 and not 198. Repeated continuous time is not deduplicated. The corrector retains the upstream use of `t_cur` for the CFG interval test. Warmup and last Full are based on the 99-call stream plan.
 
@@ -89,7 +89,7 @@ PixelGen deep-copies the denoiser for EMA. `DiCacheRuntime.__deepcopy__` creates
 | `dicache` | main probe + DCTA candidate |
 | `probe_only_ablation` | probe every eligible call but execute exact suffix |
 
-Main YAMLs use PixelGen-XL 256, BF16 mixed precision, real batch 1, EMA, 50-step exact Heun, CFG 2.25, timeshift 2, and guidance interval `(0.1,0.9]`. The main candidate contains both `rel_l1_thresh: null` and `gamma_nonfinite_policy: null`; use `scripts/materialize_dicache_config.py` to create an immutable resolved config only with a matching selection report. The generator rejects either unresolved field. A selected report binds one common candidate/checkpoint/manifest identity across the independent 8K paired, trace, and matched single-GPU benchmark evidence. The final launcher also requires a release gate binding both configs, manifest plus sidecar, selection, smoke/resume parity, compile matrix, and the unchanged port/upstream source bytes that produced the evidence. Shadow/ablation reports remain provisional and cannot authorize final 50K.
+Main YAMLs use PixelGen-XL 256, BF16 mixed precision, real batch 4/effective CFG batch 8, EMA, 50-step exact Heun, CFG 2.25, timeshift 2, and guidance interval `(0.1,0.9]`. The main candidate contains both `rel_l1_thresh: null` and `gamma_nonfinite_policy: null`; use `scripts/materialize_dicache_config.py` to create an immutable resolved config only with a matching selection report. The generator rejects either unresolved field. A selected report binds one common candidate/checkpoint/manifest identity across the independent 8K paired, trace, and matched single-GPU benchmark evidence. The final launcher also requires a release gate binding both configs, manifest plus sidecar, selection, smoke/resume parity, compile matrix, and the unchanged port/upstream source bytes that produced the evidence. Shadow/ablation reports remain provisional and cannot authorize final 50K.
 
 Compile modes are explicit. `matched_eager` is the main Full/DiCache comparison. `upstream` is valid only for `upstream_full`. `blockwise` is a deferred ablation. Dynamic Python state and `.item()` decisions remain outside compiled blocks. Primary speedup is `instrumented_full / dicache` under the same compile mode; an upstream whole-model result is supplemental.
 
@@ -97,13 +97,13 @@ Compile modes are explicit. `matched_eager` is the main Full/DiCache comparison.
 
 Primary latency uses `torch.cuda.Event` around the complete already-on-GPU batch generation through the final image tensor, with matched warmups. Compile/first-execution time is reported separately. Host `perf_counter` component fields are diagnostics: CUDA is asynchronous, so they do not replace total event timing. Probe-finiteness, gate-threshold, and DCTA finite/clipping `.item()` intervals are accumulated in `scalar_sync_time_ms` and subtracted from gate/DCTA host components to avoid double counting. Probe overhead is reported as probe + gate + scalar sync over measured batch latency, with this limitation attached.
 
-The CPU estimator reports 7,077,888 persistent bytes and six tensors for PixelGen-XL BF16 B=1, plus a 1,179,648-byte probe-state lower bound. Actual attention workspaces, allocator overhead, compilation, model/EMA parameters, and final-head temporaries require GPU measurement. Guarded sampler summaries collect peak allocated/reserved memory; no RTX 3090 peak has been measured.
+Memory planning and measured peaks use PixelGen-XL BF16 B=4. The CPU estimator excludes attention workspaces, allocator overhead, compilation, model/EMA parameters, and final-head temporaries. Guarded sampler summaries collect peak allocated/reserved memory.
 
 ## Reproducibility and evaluation
 
 The manifest fixes sample ID, class, independent CPU seed, shard position, batch group, and within-group order. Each initial Gaussian is constructed with its own CPU generator, so resume/rank/worker scheduling cannot shift later samples. Config, manifest, sidecar, checkpoint size/path/SHA-256, port/upstream source-byte hashes, Git/tree identities, sampler, batch, CFG, dtype, compile mode, DiCache profile, and the final release-gate SHA-256 are recorded. Outputs are numeric RGB uint8 PNGs written atomically. Resume validates complete groups and refuses partial/corrupt/mismatched state or a missing/different archived release gate.
 
-The old PixelGen Full 50K is `PAIRED_METRICS_BLOCKED`: it used real batch 4 and does not prove immutable per-sample noise replay for the batch-1 protocol. It may support validated unpaired distribution metrics, but never post-hoc PSNR/SSIM/LPIPS pairing. Generate a new matched `instrumented_full` from the same manifest.
+Legacy PixelGen Full outputs are `PAIRED_METRICS_BLOCKED` unless they prove immutable per-sample noise and batch-4 group replay. Generate a new matched `instrumented_full` from the same manifest for strict pairing.
 
 Evaluation stages are:
 

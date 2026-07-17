@@ -25,8 +25,8 @@ def main() -> None:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="real samples per batch group; the frozen JiT SpeCa protocol uses 1",
+        default=32,
+        help="real samples per batch group; the unified JiT baseline protocol uses 32",
     )
     parser.add_argument("--generator-device", default="cuda")
     parser.add_argument("--noise-dtype", default="float32")

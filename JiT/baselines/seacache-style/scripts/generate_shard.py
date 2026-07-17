@@ -233,7 +233,12 @@ def main() -> None:
     current_git_revision = git_revision(PIXARC_ROOT)
     run_config = {
         "model": denoiser_args.model,
-        "model_config_hash": canonical_hash(model_config),
+        # Checkpoint identity is bound independently by its resolved path and
+        # size.  Exclude its relative/absolute spelling from the architecture
+        # hash so equivalent frozen configs remain comparable.
+        "model_config_hash": canonical_hash(
+            {key: value for key, value in model_config.items() if key != "checkpoint"}
+        ),
         "ema": "EMA1",
         "input_config_hash": config_hash,
         "port_source_sha256": source_tree_sha256(BASELINE_ROOT),

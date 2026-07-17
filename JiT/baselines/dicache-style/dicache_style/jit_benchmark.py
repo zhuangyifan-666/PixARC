@@ -114,6 +114,17 @@ def validate_runner_config(
     runtime["compile_mode"] = compile_mode
     runtime["benchmark_full_mode"] = full_mode
     batch_size = int(runner.get("batch_size", runtime["batch_size"]))
+    purpose = str(runner.get("purpose", "latency"))
+    if int(runtime["batch_size"]) != 32:
+        raise ValueError("JiT primary protocol requires runtime.batch_size=32")
+    if purpose == "latency":
+        if batch_size != 32:
+            raise ValueError("JiT DiCache latency requires real batch_size=32")
+    elif purpose == "model_parity":
+        if batch_size != 1:
+            raise ValueError("JiT model parity requires one immutable sample")
+    else:
+        raise ValueError(f"unsupported JiT benchmark purpose: {purpose}")
     sample_ids = tuple(int(value) for value in runner["sample_ids"])
     seeds = tuple(int(value) for value in runner["seeds"])
     class_ids = tuple(int(value) for value in runner["class_ids"])
@@ -132,12 +143,13 @@ def validate_runner_config(
         (record for record in records if record.batch_group_id == group_id),
         key=lambda record: record.position_in_batch,
     )
+    expected_group = group if purpose == "latency" else group[:1]
     expected = (
-        tuple(record.sample_id for record in group),
-        tuple(record.seed for record in group),
-        tuple(record.class_id for record in group),
+        tuple(record.sample_id for record in expected_group),
+        tuple(record.seed for record in expected_group),
+        tuple(record.class_id for record in expected_group),
     )
-    if len(group) != batch_size or (sample_ids, seeds, class_ids) != expected:
+    if len(expected_group) != batch_size or (sample_ids, seeds, class_ids) != expected:
         raise ValueError("benchmark runner IDs differ from its immutable manifest group")
     return dicache, runtime, batch_size, sample_ids, seeds, class_ids
 

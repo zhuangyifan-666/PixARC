@@ -1,11 +1,11 @@
 # Cache-memory report
 
-The estimator is analytic and does not construct a model or allocate CUDA memory. For PixelGen-XL 256, patch size 16, hidden size 1152, real batch 1/effective combined batch 2, BF16 inherited cache, probe depth 1, it reports:
+The estimator is analytic and does not construct a model or allocate CUDA memory. For PixelGen-XL 256, patch size 16, hidden size 1152, real batch 4/effective combined batch 8, BF16 inherited cache, probe depth 1, it reports:
 
 ```text
-persistent cache bytes: 7,077,888
+persistent cache bytes: 28,311,552
 persistent tensor count: 6
-temporary probe lower bound: 1,179,648 bytes
+temporary probe lower bound: 4,718,592 bytes
 ```
 
 The six persistent tensors are previous body input, previous probe feature, and two synchronized exact anchor pairs (full and probe residual for each of the last two Full calls). Scalar counters and Python metadata are excluded. A bounded two-anchor deque removes FLUX’s ineffective older residual history without changing DCTA outputs.
@@ -16,5 +16,5 @@ At runtime, adapted and upstream-Full sampler summaries reset and read CUDA peak
 
 ```bash
 python scripts/estimate_cache_memory.py --preset pixelgen-xl-256 \
-  --batch-size 1 --probe-depth 1 --cache-dtype bfloat16
+  --batch-size 4 --probe-depth 1 --cache-dtype bfloat16
 ```

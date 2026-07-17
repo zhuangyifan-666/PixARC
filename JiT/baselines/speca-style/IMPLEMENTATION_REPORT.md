@@ -1,5 +1,7 @@
 # JiT SpeCa implementation report
 
+> Protocol update (2026-07-14): the active experiment uses real batch 32. Batch-1 answers retained below are historical audit context and are superseded for generation, selection, latency, and matched Full comparison.
+
 This report answers the required handoff questions for the unofficial JiT port. “Passed” is never inferred from code inspection; CUDA-dependent work is explicitly deferred.
 
 1. **Cache4Diffusion commit?** `91a1949fcc88acab46547f0b5f295f5de2df2870`.

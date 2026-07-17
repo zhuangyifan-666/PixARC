@@ -21,6 +21,7 @@ from record_selection_decision import (
 SCHEMA_VERSION = "pixarc-dicache-selection-v1"
 PROFILE = "flux_image_released"
 MODEL_FAMILIES = ("JiT", "PixelGen")
+BATCH_SIZE_BY_MODEL = {"JiT": 32, "PixelGen": 4}
 STATUSES = ("provisional", "selected")
 GAMMA_POLICIES = (
     "official_propagate",
@@ -75,8 +76,15 @@ def validate_selection_report(
     probe_depth = report.get("probe_depth")
     if isinstance(probe_depth, bool) or probe_depth not in (1, 2, 3):
         raise ValueError("selection probe_depth must be integer 1, 2, or 3")
-    if report.get("batch_size") != 1 or isinstance(report.get("batch_size"), bool):
-        raise ValueError("selection batch_size must be integer 1")
+    expected_batch_size = BATCH_SIZE_BY_MODEL[model_family]
+    if (
+        report.get("batch_size") != expected_batch_size
+        or isinstance(report.get("batch_size"), bool)
+    ):
+        raise ValueError(
+            f"selection batch_size must be integer {expected_batch_size} "
+            f"for {model_family}"
+        )
     if report.get("final_50k_used_for_selection") is not False:
         raise ValueError("final_50k_used_for_selection must be exactly false")
 
@@ -142,7 +150,7 @@ def validate_selection_report(
         "model_family": model_family,
         "profile": PROFILE,
         "probe_depth": probe_depth,
-        "batch_size": 1,
+        "batch_size": expected_batch_size,
         "rel_l1_thresh": threshold,
         "gamma_nonfinite_policy": gamma_policy,
         "final_50k_used_for_selection": False,
@@ -200,7 +208,7 @@ def main() -> None:
             "model_family": args.model_family,
             "profile": PROFILE,
             "probe_depth": args.probe_depth,
-            "batch_size": 1,
+            "batch_size": BATCH_SIZE_BY_MODEL[args.model_family],
             "rel_l1_thresh": args.rel_l1_thresh,
             "gamma_nonfinite_policy": args.gamma_nonfinite_policy,
             "final_50k_used_for_selection": False,

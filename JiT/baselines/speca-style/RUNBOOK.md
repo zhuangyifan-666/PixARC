@@ -50,7 +50,7 @@ git -C "$PIXARC_ROOT" diff --check
 
 Require official scheduler/error fixtures, signed-gap/exact-only predictor parity, previous-error/no-rollback, CFG stream aggregation, Heun counts, context, state-dict/reset, memory, manifest/sharding, paired-toy, metadata, and common-core tests. CPU success is not real-model parity.
 
-## 2. Immutable batch-1 manifests
+## 2. Immutable batch-32 manifests
 
 Use four disjoint signed-63-bit seed ranges:
 
@@ -59,53 +59,53 @@ Use four disjoint signed-63-bit seed ranges:
 : "${PROXY_BASE_SEED:?set a disjoint 1K seed base}"
 : "${VALIDATION_BASE_SEED:?set a disjoint 8K seed base}"
 : "${FINAL_BASE_SEED:?set a disjoint 50K seed base}"
-BATCH_SIZE=1
-SMOKE_MANIFEST="$OUTPUT_ROOT/manifests/jit_smoke8_b1.jsonl"
-PROXY_MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet1k_b1.jsonl"
-VALIDATION_MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet8k_b1.jsonl"
-MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet50k_b1.jsonl"
+BATCH_SIZE=32
+SMOKE_MANIFEST="$OUTPUT_ROOT/manifests/jit_smoke8_b32.jsonl"
+PROXY_MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet1k_b32.jsonl"
+VALIDATION_MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet8k_b32.jsonl"
+MANIFEST="$OUTPUT_ROOT/manifests/jit_imagenet50k_b32.jsonl"
 export BATCH_SIZE SMOKE_MANIFEST PROXY_MANIFEST VALIDATION_MANIFEST MANIFEST
 mkdir -p "$OUTPUT_ROOT/manifests"
 
 "$JIT_PYTHON" scripts/build_manifest.py --output "$SMOKE_MANIFEST" \
   --samples-per-class 1 --num-classes 8 --base-seed "$SMOKE_BASE_SEED" \
-  --split-name smoke8 --world-size 1 --batch-size 1 \
+  --split-name smoke8 --world-size 1 --batch-size 32 \
   --generator-device cuda --noise-dtype float32 --noise-shape 3 256 256
 "$JIT_PYTHON" scripts/build_manifest.py --output "$PROXY_MANIFEST" \
   --samples-per-class 1 --base-seed "$PROXY_BASE_SEED" \
-  --split-name imagenet1k_proxy --world-size 4 --batch-size 1 \
+  --split-name imagenet1k_proxy --world-size 4 --batch-size 32 \
   --generator-device cuda --noise-dtype float32 --noise-shape 3 256 256
 "$JIT_PYTHON" scripts/build_manifest.py --output "$VALIDATION_MANIFEST" \
   --samples-per-class 8 --base-seed "$VALIDATION_BASE_SEED" \
-  --split-name imagenet8k_validation --world-size 4 --batch-size 1 \
+  --split-name imagenet8k_validation --world-size 4 --batch-size 32 \
   --generator-device cuda --noise-dtype float32 --noise-shape 3 256 256
 "$JIT_PYTHON" scripts/build_manifest.py --output "$MANIFEST" \
   --samples-per-class 50 --base-seed "$FINAL_BASE_SEED" \
-  --split-name imagenet50k_final --world-size 4 --batch-size 1 \
+  --split-name imagenet50k_final --world-size 4 --batch-size 32 \
   --generator-device cuda --noise-dtype float32 --noise-shape 3 256 256
 ```
 
-Validate sidecars, class balance, one-sample groups, seed rules, four shards, and disjointness:
+Validate sidecars, class balance, fixed batch-32 groups (with only the final group allowed to be partial), seed rules, four shards, and disjointness:
 
 ```bash
 "$JIT_PYTHON" scripts/validate_manifest.py --manifest "$SMOKE_MANIFEST" \
   --expected-count 8 --expected-per-class 1 --expected-num-classes 8 \
-  --world-size 1 --batch-size 1 --base-seed "$SMOKE_BASE_SEED" \
+  --world-size 1 --batch-size 32 --base-seed "$SMOKE_BASE_SEED" \
   --require-sidecar --disjoint-with "$PROXY_MANIFEST" \
   --disjoint-with "$VALIDATION_MANIFEST" --disjoint-with "$MANIFEST"
 "$JIT_PYTHON" scripts/validate_manifest.py --manifest "$PROXY_MANIFEST" \
   --expected-count 1000 --expected-per-class 1 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed "$PROXY_BASE_SEED" \
+  --world-size 4 --batch-size 32 --base-seed "$PROXY_BASE_SEED" \
   --require-sidecar --disjoint-with "$SMOKE_MANIFEST" \
   --disjoint-with "$VALIDATION_MANIFEST" --disjoint-with "$MANIFEST"
 "$JIT_PYTHON" scripts/validate_manifest.py --manifest "$VALIDATION_MANIFEST" \
   --expected-count 8000 --expected-per-class 8 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed "$VALIDATION_BASE_SEED" \
+  --world-size 4 --batch-size 32 --base-seed "$VALIDATION_BASE_SEED" \
   --require-sidecar --disjoint-with "$SMOKE_MANIFEST" \
   --disjoint-with "$PROXY_MANIFEST" --disjoint-with "$MANIFEST"
 "$JIT_PYTHON" scripts/validate_manifest.py --manifest "$MANIFEST" \
   --expected-count 50000 --expected-per-class 50 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed "$FINAL_BASE_SEED" \
+  --world-size 4 --batch-size 32 --base-seed "$FINAL_BASE_SEED" \
   --require-sidecar --disjoint-with "$SMOKE_MANIFEST" \
   --disjoint-with "$PROXY_MANIFEST" --disjoint-with "$VALIDATION_MANIFEST"
 sha256sum "$OUTPUT_ROOT"/manifests/*.jsonl "$OUTPUT_ROOT"/manifests/*.meta.json
@@ -123,12 +123,12 @@ Set a provisional point for smoke/1K; the official defaults are not claimed opti
 : "${DECAY_RATE:?set provisional/selected decay rate}"
 : "${MIN_TAYLOR_STEPS:?set provisional/selected minimum Taylor span}"
 : "${MAX_TAYLOR_STEPS:?set provisional/selected maximum Taylor span}"
-[[ "$BATCH_SIZE" == 1 ]]
+[[ "$BATCH_SIZE" == 32 ]]
 mkdir -p "$OUTPUT_ROOT/memory" "$OUTPUT_ROOT/configs/jit"
 "$JIT_PYTHON" scripts/estimate_cache_memory.py --preset jit-b16-256 \
   --batch-size "$BATCH_SIZE" --max-order "$MAX_ORDER" \
   --cache-dtype bfloat16 --verify-layer -1 \
-  --output-json "$OUTPUT_ROOT/memory/jit_b1_k${MAX_ORDER}.json"
+  --output-json "$OUTPUT_ROOT/memory/jit_b32_k${MAX_ORDER}.json"
 ```
 
 Materialize absolute-checkpoint configs outside the repository. Re-run after 8K selection:
@@ -170,7 +170,7 @@ export UPSTREAM_CONFIG FULL_CONFIG FIXED_CONFIG SHADOW_CONFIG SELECTED_CONFIG
 sha256sum "$CONFIG_DIR"/*.yaml
 ```
 
-The final candidate must retain released-code mode, relative L1/`1e-10`, first-enhance 3, floor 0.01, last-block/all-token verification, batch-global gate, NFE coordinate, `interval: null`, no final-Full addition, inherited cache dtype, batch 1, and matched compile mode.
+The final candidate must retain released-code mode, relative L1/`1e-10`, first-enhance 3, floor 0.01, last-block/all-token verification, batch-global gate, NFE coordinate, `interval: null`, no final-Full addition, inherited cache dtype, batch 32, and matched compile mode. The threshold is selected under this grouped-batch protocol.
 
 ## 4. Deferred smoke
 
@@ -355,7 +355,7 @@ Select points by measured matched latency/speedup plus quality and behavior tail
 ## 10. Deferred matched benchmark
 
 ```bash
-RUNNER_CONFIG="$OUTPUT_ROOT/benchmark/jit_runner_b1.json"
+RUNNER_CONFIG="$OUTPUT_ROOT/benchmark/jit_runner_b32.json"
 mkdir -p "$(dirname "$RUNNER_CONFIG")"; export RUNNER_CONFIG
 "$JIT_PYTHON" - <<'PY'
 import json,os
@@ -368,7 +368,7 @@ export CUDA_VISIBLE_DEVICES=0 SPECA_GPU_TESTS_ALLOWED=1
 bash scripts/benchmark_single_gpu.sh \
   --runner-factory speca_style.jit_benchmark:build_benchmark_spec \
   --runner-config "$RUNNER_CONFIG" \
-  --output-json "$OUTPUT_ROOT/benchmark/jit_b1_matched.json" \
+  --output-json "$OUTPUT_ROOT/benchmark/jit_b32_matched.json" \
   --warmup-batches 10 --measured-batches 30
 ```
 
@@ -376,7 +376,7 @@ Report compile time separately, steady latency quantiles, `speedup`, action coun
 
 ## 11. Deferred four-GPU 50K
 
-The old batch-32 Full is not a strict pair. Generate a new batch-1 matched Full:
+Generate a new manifest-matched batch-32 Full; do not pair against legacy outputs that lack the immutable per-sample noise contract:
 
 `launch_4gpu_50k.sh` defaults to the final profile and always enforces exactly
 50,000 records, 50 records/class, 1,000 classes, and four ranks. Custom count
@@ -386,8 +386,8 @@ and refuses 50K. Thus omitting proxy flags below cannot silently weaken the fina
 gate.
 
 ```bash
-FINAL_FULL_ROOT="$OUTPUT_ROOT/final/jit_instrumented_full_b1"
-FINAL_SPECA_ROOT="$OUTPUT_ROOT/final/jit_speca_b1"
+FINAL_FULL_ROOT="$OUTPUT_ROOT/final/jit_instrumented_full_b32"
+FINAL_SPECA_ROOT="$OUTPUT_ROOT/final/jit_speca_b32"
 export FINAL_FULL_ROOT FINAL_SPECA_ROOT
 export CUDA_VISIBLE_DEVICES=0,1,2,3 SPECA_GPU_TESTS_ALLOWED=1
 bash scripts/launch_4gpu_50k.sh --config "$FULL_CONFIG" \
@@ -469,4 +469,4 @@ sha256sum "$SELECTED_CONFIG" "$MANIFEST" "$MANIFEST.meta.json" \
   "$FINAL_SPECA_ROOT/run_manifest.json" "$TRACE_JSON"
 ```
 
-Archive selected config/hash, manifest/sidecar/hash, source/config/checkpoint identities, run manifests, rank metadata/summaries/logs, wall clock, benchmark, analytic/observed memory, distribution/delta, paired JSON/CSV, and trace aggregation. Verify 99/198 calls, q 98→0, action/reason totals, failure-versus-next-Full naming, reset, and maxima. Report batch-1 latency, any grouped throughput, and four-GPU wall time separately; record OOM/failure without changing batch, order, dtype, or method silently.
+Archive selected config/hash, manifest/sidecar/hash, source/config/checkpoint identities, run manifests, rank metadata/summaries/logs, wall clock, benchmark, analytic/observed memory, distribution/delta, paired JSON/CSV, and trace aggregation. Verify 99/198 calls, q 98→0, action/reason totals, failure-versus-next-Full naming, reset, and maxima. Report batch-32 per-image latency, throughput, and four-GPU wall time; record OOM/failure without changing batch, order, dtype, or method silently.

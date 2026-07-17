@@ -1,0 +1,13 @@
+model,run,threshold,generated_samples,full_calls,reuse_calls,total_calls,reuse_fraction
+JiT,full,,1000,6336,0,6336,0.0
+JiT,jit_seacache_threshold_0p02,0.02,1000,3264,3072,6336,0.48484848484848486
+JiT,jit_seacache_threshold_0p05,0.05,1000,2376,3960,6336,0.625
+JiT,jit_seacache_threshold_0p1,0.1,1000,1797,4539,6336,0.7163825757575758
+JiT,jit_seacache_threshold_0p2,0.2,1000,1232,5104,6336,0.8055555555555556
+JiT,jit_seacache_threshold_0p4,0.4,1000,832,5504,6336,0.8686868686868687
+PixelGen,full,,1000,24948,0,24948,0.0
+PixelGen,pixelgen_seacache_threshold_0p02,0.02,1000,12852,12096,24948,0.48484848484848486
+PixelGen,pixelgen_seacache_threshold_0p05,0.05,1000,12026,12922,24948,0.5179573512906847
+PixelGen,pixelgen_seacache_threshold_0p1,0.1,1000,8408,16540,24948,0.6629789963123296
+PixelGen,pixelgen_seacache_threshold_0p2,0.2,1000,5757,19191,24948,0.7692400192400193
+PixelGen,pixelgen_seacache_threshold_0p4,0.4,1000,3396,21552,24948,0.8638768638768639

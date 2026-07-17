@@ -22,6 +22,6 @@ JiT upstream code already places compile decorators around blocks/final componen
 
 ## Fair timing contract
 
-The primary result is median matched-instrumented-Full latency divided by median SpeCa latency with identical GPU, real batch 1, effective CFG layout, checkpoint/EMA, 50-step Heun, CFG/timeshift, dtype, initial noise, and compile mode. `instrumented_full` measures the split exact model path only: it allocates/updates no Taylor factors and runs no verifier. SpeCa timing includes its predictor, Full-action history updates, local verification, reductions, scalar sync, scheduler, cache I/O, CFG, sampler, fresh final head, unpatchify, and reset. Compile time, loading, data loading, CPU copy, PNG, and evaluators are excluded.
+The primary result is median matched-instrumented-Full latency divided by median SpeCa latency with identical GPU, real batch 32, effective CFG layout, checkpoint/EMA, 50-step Heun, CFG/timeshift, dtype, initial noise, and compile mode. `instrumented_full` measures the split exact model path only: it allocates/updates no Taylor factors and runs no verifier. SpeCa timing includes its predictor, Full-action history updates, local verification, reductions, scalar sync, scheduler, cache I/O, CFG, sampler, fresh final head, unpatchify, and reset. Compile time, loading, data loading, CPU copy, PNG, and evaluators are excluded.
 
 No GPU compile run was executed in this task. Graph breaks, compile time, parity, speedup, and memory for `blockwise` remain deferred. Until measured, `matched_eager` is the only registered primary comparison.

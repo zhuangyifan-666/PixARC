@@ -145,18 +145,56 @@ def build_run_metadata(
 
 
 def validate_paired_runs(
-    reference: Mapping[str, Any], candidate: Mapping[str, Any]
+    reference: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    archived_model_configs_match: bool = False,
 ) -> None:
     errors = []
     for field in PAIRING_FIELDS:
         if field not in reference or field not in candidate:
             errors.append(f"missing required field {field!r}")
+        elif (
+            field == "model_config_hash"
+            and archived_model_configs_match
+        ):
+            continue
         elif reference[field] != candidate[field]:
             errors.append(
                 f"{field}: reference={reference[field]!r}, candidate={candidate[field]!r}"
             )
     if errors:
         raise ValueError("runs are not strictly paired:\n- " + "\n- ".join(errors))
+
+
+def validate_archived_model_configs(
+    reference_root: str | os.PathLike[str],
+    candidate_root: str | os.PathLike[str],
+) -> None:
+    """Compare archived model architecture/config while ignoring checkpoint spelling.
+
+    Resolved checkpoint path and size remain mandatory PAIRING_FIELDS.  This
+    comparison only prevents a relative-versus-absolute checkpoint string from
+    changing the model architecture hash.
+    """
+
+    normalized = []
+    for label, root_value in (
+        ("reference", reference_root),
+        ("candidate", candidate_root),
+    ):
+        path = Path(root_value) / "config_resolved.yaml"
+        with path.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        if not isinstance(config, dict) or not isinstance(config.get("model"), dict):
+            raise ValueError(f"{label} archived config is missing a model mapping")
+        model = dict(config["model"])
+        model.pop("checkpoint", None)
+        normalized.append(model)
+    if canonical_hash(normalized[0]) != canonical_hash(normalized[1]):
+        raise ValueError(
+            "archived model configs differ after removing checkpoint path spelling"
+        )
 
 
 def validate_full_seacache_roles(

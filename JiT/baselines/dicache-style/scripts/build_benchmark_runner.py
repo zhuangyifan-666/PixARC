@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--model-config", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("batch-size must be positive")

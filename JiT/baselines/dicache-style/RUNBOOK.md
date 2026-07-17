@@ -77,40 +77,40 @@ export MANIFEST="$OUTPUT_ROOT/manifests/final50k.jsonl"
 
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_manifest.py \
   --output "$SMOKE_MANIFEST" --samples-per-class 1 --num-classes 8 \
-  --base-seed "$SMOKE_BASE_SEED" --split-name smoke8 --world-size 1 --batch-size 1
+  --base-seed "$SMOKE_BASE_SEED" --split-name smoke8 --world-size 1 --batch-size 32
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_manifest.py \
   --output "$PILOT_MANIFEST" --samples-per-class 1 --num-classes 1000 \
-  --base-seed "$PILOT_BASE_SEED" --split-name search1k --world-size 4 --batch-size 1
+  --base-seed "$PILOT_BASE_SEED" --split-name search1k --world-size 4 --batch-size 32
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_manifest.py \
   --output "$VALIDATION_MANIFEST" --samples-per-class 8 --num-classes 1000 \
-  --base-seed "$VALIDATION_BASE_SEED" --split-name validation8k --world-size 4 --batch-size 1
+  --base-seed "$VALIDATION_BASE_SEED" --split-name validation8k --world-size 4 --batch-size 32
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_manifest.py \
   --output "$MANIFEST" --samples-per-class 50 --num-classes 1000 \
-  --base-seed "$FINAL_BASE_SEED" --split-name final50k --world-size 4 --batch-size 1
+  --base-seed "$FINAL_BASE_SEED" --split-name final50k --world-size 4 --batch-size 32
 
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/validate_manifest.py \
   --manifest "$SMOKE_MANIFEST" --expected-count 8 --expected-per-class 1 \
-  --expected-num-classes 8 --world-size 1 --batch-size 1 \
+  --expected-num-classes 8 --world-size 1 --batch-size 32 \
   --base-seed "$SMOKE_BASE_SEED" --require-sidecar
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/validate_manifest.py \
   --manifest "$PILOT_MANIFEST" --expected-count 1000 --expected-per-class 1 \
-  --expected-num-classes 1000 --world-size 4 --batch-size 1 \
+  --expected-num-classes 1000 --world-size 4 --batch-size 32 \
   --base-seed "$PILOT_BASE_SEED" --require-sidecar \
   --disjoint-with "$SMOKE_MANIFEST"
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/validate_manifest.py \
   --manifest "$VALIDATION_MANIFEST" --expected-count 8000 --expected-per-class 8 \
-  --expected-num-classes 1000 --world-size 4 --batch-size 1 \
+  --expected-num-classes 1000 --world-size 4 --batch-size 32 \
   --base-seed "$VALIDATION_BASE_SEED" --require-sidecar \
   --disjoint-with "$SMOKE_MANIFEST" --disjoint-with "$PILOT_MANIFEST"
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/validate_manifest.py \
   --manifest "$MANIFEST" --expected-count 50000 --expected-per-class 50 \
-  --expected-num-classes 1000 --world-size 4 --batch-size 1 \
+  --expected-num-classes 1000 --world-size 4 --batch-size 32 \
   --base-seed "$FINAL_BASE_SEED" --require-sidecar \
   --disjoint-with "$SMOKE_MANIFEST" --disjoint-with "$PILOT_MANIFEST" \
   --disjoint-with "$VALIDATION_MANIFEST"
 ```
 
-The preregistered rule must name quality constraints, invalid-run handling, the primary batch-1 CUDA-event latency statistic, tie-breaking, and that 8K performs the one-time selection while 50K is evaluation-only. Freeze its exact text before observing 1K:
+The preregistered rule must name quality constraints, invalid-run handling, the primary batch-32 CUDA-event per-image latency statistic, tie-breaking, and that 8K performs the one-time selection while 50K is evaluation-only. Freeze its exact text before observing 1K:
 
 ```bash
 test ! -e "$OUTPUT_ROOT/selection/selection_rule.txt"
@@ -125,10 +125,10 @@ These CPU estimates are planning evidence; measured allocated/reserved peaks com
 
 ```bash
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/estimate_cache_memory.py \
-  --preset jit-b16-256 --batch-size 1 --probe-depth 1 --cache-dtype bfloat16 \
+  --preset jit-b16-256 --batch-size 32 --probe-depth 1 --cache-dtype bfloat16 \
   --output-json "$OUTPUT_ROOT/reports/cache_memory_bf16.json"
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/estimate_cache_memory.py \
-  --preset jit-b16-256 --batch-size 1 --probe-depth 1 --cache-dtype float32 \
+  --preset jit-b16-256 --batch-size 32 --probe-depth 1 --cache-dtype float32 \
   --output-json "$OUTPUT_ROOT/reports/cache_memory_fp32.json"
 ```
 
@@ -254,7 +254,7 @@ Retain each `shadow_diagnostics.json`. Only depth 1 may inform the main profile;
 
 ## 8. 1K
 
-Generate matched instrumented Full once. Then every preregistered coarse candidate must run four-GPU generation, strict paired metrics, trace aggregation, and a real batch-1 single-GPU CUDA-event Full/DiCache benchmark.
+Generate matched instrumented Full once. Then every preregistered coarse candidate must run four-GPU generation, strict paired metrics, trace aggregation, and a real batch-32 single-GPU CUDA-event Full/DiCache benchmark.
 
 ```bash
 : "${FOUR_GPU_IDS:?four unique allocated idle GPU IDs or UUIDs, comma-separated}"
@@ -321,7 +321,7 @@ for SPEC in $COARSE_CANDIDATES; do
     --output-json "$OUTPUT_ROOT/metrics/search_${TAG}_trace.json"
   CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_benchmark_runner.py \
     --model-config "$OUTPUT_ROOT/configs/search_dicache_${TAG}.yaml" \
-    --manifest "$PILOT_MANIFEST" --batch-size 1 \
+    --manifest "$PILOT_MANIFEST" --batch-size 32 \
     --output "$OUTPUT_ROOT/benchmark/search_${TAG}.runner.json"
   DICACHE_GPU_TESTS_ALLOWED=1 CUDA_VISIBLE_DEVICES="$SINGLE_GPU_ID" \
     bash scripts/benchmark_single_gpu.sh \
@@ -406,7 +406,7 @@ for SPEC in $FINE_CANDIDATES; do
     --output-json "$OUTPUT_ROOT/metrics/validation_${TAG}_trace.json"
   CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_benchmark_runner.py \
     --model-config "$OUTPUT_ROOT/configs/validation_dicache_${TAG}.yaml" \
-    --manifest "$VALIDATION_MANIFEST" --batch-size 1 \
+    --manifest "$VALIDATION_MANIFEST" --batch-size 32 \
     --output "$OUTPUT_ROOT/benchmark/validation_${TAG}.runner.json"
   DICACHE_GPU_TESTS_ALLOWED=1 CUDA_VISIBLE_DEVICES="$SINGLE_GPU_ID" \
     bash scripts/benchmark_single_gpu.sh \
@@ -476,7 +476,7 @@ test "$BENCHMARK_REPEATS" -ge 2
 
 export FINAL_BENCH_RUNNER="$OUTPUT_ROOT/benchmark/final_matched.runner.json"
 CUDA_VISIBLE_DEVICES='' "$JIT_PYTHON" scripts/build_benchmark_runner.py \
-  --model-config "$FINAL_DICACHE_CONFIG" --manifest "$MANIFEST" --batch-size 1 \
+  --model-config "$FINAL_DICACHE_CONFIG" --manifest "$MANIFEST" --batch-size 32 \
   --output "$FINAL_BENCH_RUNNER"
 for REP in $(seq 1 "$BENCHMARK_REPEATS"); do
   DICACHE_GPU_TESTS_ALLOWED=1 CUDA_VISIBLE_DEVICES="$SINGLE_GPU_ID" \
@@ -625,4 +625,4 @@ cp "$DICACHE_ROOT/four_gpu_wall_clock.json" \
   "$OUTPUT_ROOT/metrics/dicache_four_gpu_wall_clock.json"
 ```
 
-The persistent evidence set is the two final trace reports, the repeated matched CUDA-event latency/memory aggregate, `compile_matrix.json` plus its row reports and Dynamo logs, and the two four-GPU wall-clock JSONs. Component host timers are diagnostic only; primary latency is batch-1 CUDA-event timing. Each launcher report retains immutable per-invocation wall clocks, reports their active-time sum separately from first-start-to-final-end time (which includes resume gaps), and must never label only the final resumed suffix as 50K throughput.
+The persistent evidence set is the two final trace reports, the repeated matched CUDA-event latency/memory aggregate, `compile_matrix.json` plus its row reports and Dynamo logs, and the two four-GPU wall-clock JSONs. Component host timers are diagnostic only; primary latency is batch-32 CUDA-event per-image timing. Each launcher report retains immutable per-invocation wall clocks, reports their active-time sum separately from first-start-to-final-end time (which includes resume gaps), and must never label only the final resumed suffix as 50K throughput.

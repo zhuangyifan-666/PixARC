@@ -1,4 +1,8 @@
-from speca_style.distribution_metrics import distribution_deltas
+from pathlib import Path
+
+import pytest
+
+from speca_style.distribution_metrics import distribution_deltas, run_adm_evaluator
 
 
 def _report(method, **metrics):
@@ -69,3 +73,48 @@ def test_distribution_delta_names_and_direction():
         "delta_precision": -0.050000000000000044,
         "delta_recall": 0.020000000000000018,
     }
+
+
+def _fake_adm_tree(tmp_path: Path, body: str):
+    evaluator = tmp_path / "evaluator.py"
+    evaluator.write_text(body, encoding="utf-8")
+    (tmp_path / "classify_image_graph_def.pb").write_bytes(b"local-graph")
+    reference = tmp_path / "reference.npz"
+    sample = tmp_path / "sample.npz"
+    reference.write_bytes(b"reference")
+    sample.write_bytes(b"sample")
+    return evaluator, reference, sample
+
+
+def test_adm_evaluator_runs_from_local_graph_directory(tmp_path):
+    evaluator, reference, sample = _fake_adm_tree(
+        tmp_path,
+        "import os\n"
+        "assert os.path.isfile('classify_image_graph_def.pb')\n"
+        "print('Inception Score: 1.5')\n"
+        "print('FID: 2.5')\n"
+        "print('sFID: 3.5')\n"
+        "print('Precision: 0.75')\n"
+        "print('Recall: 0.5')\n",
+    )
+    metrics, output = run_adm_evaluator(
+        evaluator=evaluator, reference_npz=reference, sample_npz=sample
+    )
+    assert metrics == {
+        "inception_score": 1.5,
+        "fid": 2.5,
+        "sfid": 3.5,
+        "precision": 0.75,
+        "recall": 0.5,
+    }
+    assert "Inception Score" in output
+
+
+def test_adm_evaluator_failure_retains_child_output(tmp_path):
+    evaluator, reference, sample = _fake_adm_tree(
+        tmp_path, "print('specific evaluator failure')\nraise SystemExit(7)\n"
+    )
+    with pytest.raises(RuntimeError, match="specific evaluator failure"):
+        run_adm_evaluator(
+            evaluator=evaluator, reference_npz=reference, sample_npz=sample
+        )

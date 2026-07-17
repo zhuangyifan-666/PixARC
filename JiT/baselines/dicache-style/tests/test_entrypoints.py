@@ -11,7 +11,11 @@ import numpy as np
 import pytest
 import yaml
 
-from dicache_style.image_io import atomic_write_png, validate_outputs
+from dicache_style.image_io import (
+    atomic_write_png,
+    validate_output_run_identity,
+    validate_outputs,
+)
 from dicache_style.manifest import build_manifest
 from dicache_style.metadata import DICACHE_CONFIG_FIELDS
 
@@ -157,6 +161,22 @@ def test_output_validation_uses_dicache_metadata_fields(tmp_path: Path):
     )
     assert report["profile"] == "flux_image_released"
     assert report["release_gate_sha256"] == "unreleased"
+
+    run_metadata = {
+        "input_config_hash": "config",
+        "dicache_config_hash": "dicache",
+        "release_gate_sha256": "unreleased",
+        "checkpoint_path": "/checkpoint",
+        "checkpoint_size": 1,
+        "manifest_sha256": "manifest",
+        "method": "instrumented_full",
+        "batch_size": 32,
+        "real_batch_size": 32,
+        "effective_cfg_batch_size": 64,
+        "resolution": 4,
+        **{field: config["dicache"][field] for field in DICACHE_CONFIG_FIELDS},
+    }
+    validate_output_run_identity(report, run_metadata)
 
     missing_gate_identity = deepcopy(metadata)
     missing_gate_identity[0].pop("release_gate_sha256")

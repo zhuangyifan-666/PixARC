@@ -80,6 +80,7 @@ def test_resume_binds_existing_rows_to_release_gate_digest(tmp_path: Path):
         checkpoint_path="/checkpoint",
         checkpoint_size=1,
         method="dicache",
+        protocol_batch_size=1,
         resolution=4,
     )
     assert pending == []
@@ -98,5 +99,82 @@ def test_resume_binds_existing_rows_to_release_gate_digest(tmp_path: Path):
             checkpoint_path="/checkpoint",
             checkpoint_size=1,
             method="dicache",
+            protocol_batch_size=1,
+            resolution=4,
+        )
+
+
+def test_resume_accepts_complete_short_final_group_with_protocol_batch(tmp_path: Path):
+    records = build_manifest(
+        samples_per_class=1,
+        base_seed=17,
+        split_name="short-final-group",
+        world_size=1,
+        batch_size=4,
+        num_classes=6,
+    )
+    final_group_id = records[-1].batch_group_id
+    final_group = [row for row in records if row.batch_group_id == final_group_id]
+    assert len(final_group) == 2
+    sample_dir = tmp_path / "samples"
+    metadata = {}
+    for record in final_group:
+        atomic_write_png(
+            np.zeros((4, 4, 3), dtype=np.uint8),
+            sample_dir / f"{record.sample_id:06d}.png",
+            resolution=4,
+        )
+        metadata[record.sample_id] = {
+            "class_id": record.class_id,
+            "seed": record.seed,
+            "batch_group_id": record.batch_group_id,
+            "position_in_batch": record.position_in_batch,
+            "manifest_sha256": "manifest",
+            "config_hash": "config",
+            "dicache_config_hash": "dicache",
+            "release_gate_sha256": "a" * 64,
+            "checkpoint_path": "/checkpoint",
+            "checkpoint_size": 1,
+            "method": "dicache",
+            "real_batch_size": 4,
+            "effective_cfg_batch_size": 8,
+            "trajectory_real_batch_size": 2,
+            "trajectory_effective_cfg_batch_size": 4,
+        }
+
+    pending, skipped = resumable_batch_groups(
+        records,
+        0,
+        sample_dir,
+        metadata,
+        manifest_sha256="manifest",
+        config_hash="config",
+        dicache_config_hash="dicache",
+        release_gate_sha256="a" * 64,
+        checkpoint_path="/checkpoint",
+        checkpoint_size=1,
+        method="dicache",
+        protocol_batch_size=4,
+        resolution=4,
+    )
+    assert len(pending) == 1
+    assert [row.batch_group_id for row in pending[0]] == [records[0].batch_group_id] * 4
+    assert skipped == [final_group_id]
+
+    metadata[final_group[0].sample_id]["real_batch_size"] = 2
+    with pytest.raises(RuntimeError, match="real_batch_size"):
+        resumable_batch_groups(
+            records,
+            0,
+            sample_dir,
+            metadata,
+            manifest_sha256="manifest",
+            config_hash="config",
+            dicache_config_hash="dicache",
+            release_gate_sha256="a" * 64,
+            checkpoint_path="/checkpoint",
+            checkpoint_size=1,
+            method="dicache",
+            protocol_batch_size=4,
             resolution=4,
         )

@@ -1,5 +1,7 @@
 # JiT Full-reference compatibility
 
+> Protocol update (2026-07-14): active JiT DiCache and matched Full runs use real batch 32. Historical batch-1 instructions below are superseded; legacy outputs remain blocked unless their immutable batch-32 identities match.
+
 ## Decision
 
 No existing JiT output is accepted for strict paired metrics until its immutable run manifest proves every pairing field. The safe default is `PAIRED_METRICS_BLOCKED`.

@@ -15,7 +15,7 @@ All unknown paths and device assignments are required variables; the runbook del
 
 export BASELINE_ROOT="$PIXARC_ROOT/PixelGen/baselines/dicache-style"
 export MANIFEST="$OUTPUT_ROOT/manifests/final_50k.jsonl"
-export BATCH_SIZE=1
+export BATCH_SIZE=4
 
 test -d "$PIXARC_ROOT/.git"
 test -f "$CHECKPOINT"
@@ -88,25 +88,25 @@ CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/build_manifest.py" \
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/validate_manifest.py" \
   --manifest "$OUTPUT_ROOT/manifests/smoke_4.jsonl" \
   --expected-count 4 --expected-per-class 1 --expected-num-classes 4 \
-  --world-size 1 --batch-size 1 --base-seed 100000 --require-sidecar
+  --world-size 1 --batch-size 4 --base-seed 100000 --require-sidecar
 
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/validate_manifest.py" \
   --manifest "$OUTPUT_ROOT/manifests/search_1k.jsonl" \
   --expected-count 1000 --expected-per-class 1 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed 1100000 --require-sidecar \
+  --world-size 4 --batch-size 4 --base-seed 1100000 --require-sidecar \
   --disjoint-with "$OUTPUT_ROOT/manifests/smoke_4.jsonl"
 
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/validate_manifest.py" \
   --manifest "$OUTPUT_ROOT/manifests/validation_8k.jsonl" \
   --expected-count 8000 --expected-per-class 8 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed 2100000 --require-sidecar \
+  --world-size 4 --batch-size 4 --base-seed 2100000 --require-sidecar \
   --disjoint-with "$OUTPUT_ROOT/manifests/smoke_4.jsonl" \
   --disjoint-with "$OUTPUT_ROOT/manifests/search_1k.jsonl"
 
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/validate_manifest.py" \
   --manifest "$MANIFEST" \
   --expected-count 50000 --expected-per-class 50 --expected-num-classes 1000 \
-  --world-size 4 --batch-size 1 --base-seed 3100000 --require-sidecar \
+  --world-size 4 --batch-size 4 --base-seed 3100000 --require-sidecar \
   --disjoint-with "$OUTPUT_ROOT/manifests/smoke_4.jsonl" \
   --disjoint-with "$OUTPUT_ROOT/manifests/search_1k.jsonl" \
   --disjoint-with "$OUTPUT_ROOT/manifests/validation_8k.jsonl"
@@ -126,7 +126,7 @@ Do not amend this file after observing 1K, 8K, or 50K evidence. A changed rule i
 
 ```bash
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/estimate_cache_memory.py" \
-  --preset pixelgen-xl-256 --batch-size 1 --probe-depth 1 \
+  --preset pixelgen-xl-256 --batch-size 4 --probe-depth 1 \
   --cache-dtype bfloat16 \
   --output-json "$OUTPUT_ROOT/metrics/cache_estimate.json"
 ```
@@ -261,7 +261,7 @@ Keep `shadow_diagnostics.json` for each depth. Only depth 1 informs the main pro
 
 ## 8. Disjoint 1K coarse search
 
-Generate the matched instrumented Full once. Then, for every preregistered `tag=value` candidate, create a matching provisional report/config, run four-GPU generation, strict paired metrics, trace aggregation, and a real batch-1 single-GPU CUDA-event Full/DiCache pair benchmark. No candidate is allowed to skip a column of evidence.
+Generate the matched instrumented Full once. Then, for every preregistered `tag=value` candidate, create a matching provisional report/config, run four-GPU generation, strict paired metrics, trace aggregation, and a real batch-4 single-GPU CUDA-event Full/DiCache pair benchmark. No candidate is allowed to skip a column of evidence.
 
 ```bash
 test "$(cat "$OUTPUT_ROOT/selection/gamma_policy.txt")" = "$GAMMA_NONFINITE_POLICY"
@@ -328,7 +328,7 @@ for SPEC in $COARSE_CANDIDATES; do
   CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/build_benchmark_runner.py" \
     --model-config "$OUTPUT_ROOT/configs/search_dicache_${TAG}.yaml" \
     --manifest "$OUTPUT_ROOT/manifests/search_1k.jsonl" \
-    --batch-size 1 --output "$OUTPUT_ROOT/benchmark/search_${TAG}.runner.json"
+    --batch-size 4 --output "$OUTPUT_ROOT/benchmark/search_${TAG}.runner.json"
 
   DICACHE_GPU_TESTS_ALLOWED=1 CUDA_VISIBLE_DEVICES="$SINGLE_GPU_VISIBLE_DEVICE" \
     bash "$BASELINE_ROOT/scripts/benchmark_single_gpu.sh" \
@@ -415,7 +415,7 @@ for SPEC in $FINE_CANDIDATES; do
   CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/build_benchmark_runner.py" \
     --model-config "$OUTPUT_ROOT/configs/validation_dicache_${TAG}.yaml" \
     --manifest "$OUTPUT_ROOT/manifests/validation_8k.jsonl" \
-    --batch-size 1 --output "$OUTPUT_ROOT/benchmark/validation_${TAG}.runner.json"
+    --batch-size 4 --output "$OUTPUT_ROOT/benchmark/validation_${TAG}.runner.json"
 
   DICACHE_GPU_TESTS_ALLOWED=1 CUDA_VISIBLE_DEVICES="$SINGLE_GPU_VISIBLE_DEVICE" \
     bash "$BASELINE_ROOT/scripts/benchmark_single_gpu.sh" \
@@ -480,7 +480,7 @@ test "$BENCHMARK_REPEATS" -ge 2
 
 CUDA_VISIBLE_DEVICES='' python "$BASELINE_ROOT/scripts/build_benchmark_runner.py" \
   --model-config "$OUTPUT_ROOT/configs/final_dicache.yaml" \
-  --manifest "$MANIFEST" --batch-size 1 \
+  --manifest "$MANIFEST" --batch-size 4 \
   --output "$OUTPUT_ROOT/benchmark/final_matched.runner.json"
 
 for REP in $(seq 1 "$BENCHMARK_REPEATS"); do
@@ -695,4 +695,4 @@ cp "$OUTPUT_ROOT/final_50k/dicache/four_gpu_wall_clock.json" \
   "$OUTPUT_ROOT/metrics/dicache_four_gpu_wall_clock.json"
 ```
 
-The final persistent evidence set is `full_trace.json`, `dicache_trace.json`, `final_matched_benchmark_aggregate.json`, `compile_matrix.json` plus its five row reports/logs, and the two copied wall-clock JSONs. Host component timers are diagnostic only; primary latency is the CUDA-event batch-1 measurement. Each launcher JSON retains immutable per-invocation clocks, distinguishes summed active launcher time from first-start-to-final-end time including resume gaps, and must never present only the last resumed suffix as 50K throughput.
+The final persistent evidence set is `full_trace.json`, `dicache_trace.json`, `final_matched_benchmark_aggregate.json`, `compile_matrix.json` plus its five row reports/logs, and the two copied wall-clock JSONs. Host component timers are diagnostic only; primary latency is the CUDA-event batch-4 per-image measurement. Each launcher JSON retains immutable per-invocation clocks, distinguishes summed active launcher time from first-start-to-final-end time including resume gaps, and must never present only the last resumed suffix as 50K throughput.

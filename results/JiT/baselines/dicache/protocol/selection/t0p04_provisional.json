@@ -1,0 +1,13 @@
+{
+  "batch_size": 32,
+  "decision": null,
+  "final_50k_used_for_selection": false,
+  "gamma_nonfinite_policy": "official_propagate",
+  "model_family": "JiT",
+  "passed": true,
+  "probe_depth": 1,
+  "profile": "flux_image_released",
+  "rel_l1_thresh": 0.04,
+  "schema_version": "pixarc-dicache-selection-v1",
+  "status": "provisional"
+}

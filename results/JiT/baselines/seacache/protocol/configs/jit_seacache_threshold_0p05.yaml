@@ -1,0 +1,24 @@
+model:
+  variant: JiT-B/16
+  checkpoint: /mnt/iset/nfs-main/private/zhuangyifan/PixARC/JiT/checkpoints/JiT-B-16-256/checkpoint-last.pth
+  image_size: 256
+  num_classes: 1000
+  args:
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+sampling:
+  method: heun
+  steps: 50
+  cfg_scale: 3.0
+  guidance_interval:
+  - 0.1
+  - 1.0
+  noise_scale: 1.0
+  dtype: bfloat16
+seacache:
+  mode: seacache
+  threshold: 0.05
+  trace_mode: summary
+runtime:
+  batch_size: 32
+  compile_mode: matched_eager

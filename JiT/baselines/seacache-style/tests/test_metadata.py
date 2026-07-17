@@ -1,9 +1,13 @@
 import tempfile
 import unittest
 import json
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
 import yaml
+from PIL import Image
 
 from seacache_style.image_io import load_rank_metadata
 from seacache_style.manifest import (
@@ -17,10 +21,15 @@ from seacache_style.metadata import (
     atomic_write_json,
     canonical_hash,
     source_tree_sha256,
+    validate_archived_model_configs,
     validate_paired_runs,
     validate_run_artifacts,
 )
-from seacache_style.distribution_metrics import build_adm_sample_npz, distribution_deltas
+from seacache_style.distribution_metrics import (
+    build_adm_sample_npz,
+    distribution_deltas,
+    run_adm_evaluator,
+)
 
 
 class MetadataTest(unittest.TestCase):
@@ -49,6 +58,77 @@ class MetadataTest(unittest.TestCase):
                     output_npz=Path(directory) / "samples",
                     resolution=8,
                 )
+
+    def test_sample_npz_closes_backing_memmap_before_temp_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = root / "samples"
+            samples.mkdir()
+            records = build_manifest(
+                samples_per_class=1,
+                base_seed=10,
+                split_name="toy",
+                world_size=1,
+                batch_size=1,
+                num_classes=1,
+            )
+            Image.new("RGB", (8, 8), color=(1, 2, 3)).save(
+                samples / "000000.png"
+            )
+            captured = []
+            real_open_memmap = np.lib.format.open_memmap
+
+            def capture_memmap(*args, **kwargs):
+                value = real_open_memmap(*args, **kwargs)
+                captured.append(value)
+                return value
+
+            with patch(
+                "seacache_style.distribution_metrics.np.lib.format.open_memmap",
+                side_effect=capture_memmap,
+            ):
+                build_adm_sample_npz(
+                    sample_dir=samples,
+                    manifest=records,
+                    output_npz=root / "samples.npz",
+                    resolution=8,
+                )
+            self.assertEqual(len(captured), 1)
+            self.assertTrue(captured[0]._mmap.closed)
+
+    def test_adm_evaluator_runs_from_its_own_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evaluator_dir = root / "evaluator"
+            evaluator_dir.mkdir()
+            evaluator = evaluator_dir / "evaluator.py"
+            reference = root / "reference.npz"
+            samples = root / "samples.npz"
+            for path in (evaluator, reference, samples):
+                path.write_bytes(b"placeholder")
+            output = "\n".join(
+                (
+                    "FID: 1.0",
+                    "sFID: 2.0",
+                    "Inception Score: 3.0",
+                    "precision: 0.4",
+                    "recall: 0.5",
+                )
+            )
+            with patch(
+                "seacache_style.distribution_metrics.subprocess.run"
+            ) as mocked_run:
+                mocked_run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=output
+                )
+                metrics, raw_output = run_adm_evaluator(
+                    evaluator=evaluator,
+                    reference_npz=reference,
+                    sample_npz=samples,
+                )
+            self.assertEqual(metrics["fid"], 1.0)
+            self.assertEqual(raw_output, output)
+            self.assertEqual(mocked_run.call_args.kwargs["cwd"], str(evaluator_dir))
 
     def test_archived_run_and_rank_metadata_binding(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +207,53 @@ class MetadataTest(unittest.TestCase):
         del missing["sampler"]
         with self.assertRaises(ValueError):
             validate_paired_runs(self.run, missing)
+
+    def test_archived_model_comparison_ignores_only_checkpoint_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference_root = root / "reference"
+            candidate_root = root / "candidate"
+            reference_root.mkdir()
+            candidate_root.mkdir()
+            model = {"variant": "toy", "args": {"dropout": 0.0}}
+            (reference_root / "config_resolved.yaml").write_text(
+                yaml.safe_dump(
+                    {"model": {**model, "checkpoint": "../checkpoint.pth"}}
+                ),
+                encoding="utf-8",
+            )
+            (candidate_root / "config_resolved.yaml").write_text(
+                yaml.safe_dump(
+                    {"model": {**model, "checkpoint": "/abs/checkpoint.pth"}}
+                ),
+                encoding="utf-8",
+            )
+            validate_archived_model_configs(reference_root, candidate_root)
+
+            candidate = dict(self.run)
+            candidate["model_config_hash"] = "different-spelling-hash"
+            with self.assertRaises(ValueError):
+                validate_paired_runs(self.run, candidate)
+            validate_paired_runs(
+                self.run,
+                candidate,
+                archived_model_configs_match=True,
+            )
+
+            (candidate_root / "config_resolved.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "model": {
+                            "variant": "toy",
+                            "args": {"dropout": 0.5},
+                            "checkpoint": "/abs/checkpoint.pth",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                validate_archived_model_configs(reference_root, candidate_root)
 
     def test_distribution_deltas(self):
         full = {

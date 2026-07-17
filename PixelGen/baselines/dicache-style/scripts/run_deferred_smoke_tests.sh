@@ -149,7 +149,7 @@ with open(summary_path, encoding="utf-8") as handle:
     summary = json.load(handle)
 assert_finite(summary, "rank_summary")
 trajectory_count = int(summary.get("trajectory_count", -1))
-assert trajectory_count == expected_count, "candidate trajectory count mismatch"
+assert trajectory_count > 0, "candidate trajectory count must be positive"
 assert int(summary.get("total_nfe", -1)) == expected_nfe * trajectory_count
 assert int(summary.get("total_stream_calls", -1)) == expected_forwards * trajectory_count
 assert int(summary.get("network_forward_count", -1)) == expected_forwards * trajectory_count
@@ -166,6 +166,10 @@ with open(metadata_path, encoding="utf-8") as handle:
             assert_finite(row, f"metadata[{len(rows)}]")
             rows.append(row)
 assert len(rows) == expected_count, "candidate metadata row count mismatch"
+metadata_trajectory_count = len(
+    {str(row.get("trajectory_id", f"legacy-row-{index}")) for index, row in enumerate(rows)}
+)
+assert trajectory_count == metadata_trajectory_count, "candidate trajectory count mismatch"
 for row in rows:
     assert row.get("trajectory_call_count_valid") is True
     assert int(row.get("trajectory_total_nfe", -1)) == expected_nfe

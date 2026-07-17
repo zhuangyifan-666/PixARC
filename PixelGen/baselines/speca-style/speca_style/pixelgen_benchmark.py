@@ -145,10 +145,10 @@ def build_benchmark_spec(runner: Mapping[str, Any]) -> BenchmarkSpec:
     unwrapped_for_eager = int(getattr(net, "compile_wrappers_unwrapped", 0))
 
     batch_size = int(runner.get("batch_size", runtime["batch_size"]))
-    if int(runtime["batch_size"]) != 1 or int(runtime["effective_cfg_batch_size"]) != 2:
-        raise ValueError("primary PixelGen protocol requires real batch=1 and CFG batch=2")
-    if batch_size != 1:
-        raise ValueError("PixelGen SpeCa latency must use real batch_size=1")
+    if int(runtime["batch_size"]) != 4 or int(runtime["effective_cfg_batch_size"]) != 8:
+        raise ValueError("primary PixelGen protocol requires real batch=4 and CFG batch=8")
+    if batch_size != 4:
+        raise ValueError("PixelGen SpeCa latency must use real batch_size=4")
     sample_ids = tuple(int(value) for value in runner["sample_ids"])
     seeds = tuple(int(value) for value in runner["seeds"])
     class_ids = tuple(int(value) for value in runner["class_ids"])

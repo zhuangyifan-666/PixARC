@@ -22,6 +22,7 @@ sys.path.insert(0, str(BASELINE_ROOT))
 from dicache_style.source_identity import release_source_bindings  # noqa: E402
 
 SCHEMA_VERSION = "pixarc-dicache-smoke-gate-v1"
+BATCH_SIZE_BY_MODEL = {"JiT": 32, "PixelGen": 4}
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -99,8 +100,11 @@ def _load_config_core(
         raise ValueError(f"smoke config lacks dicache/runtime mappings: {path}")
     if dicache.get("profile") != "flux_image_released" or dicache.get("probe_depth") != 1:
         raise ValueError("smoke config is not the depth-1 FLUX image profile")
-    if runtime.get("batch_size") != 1:
-        raise ValueError("smoke config must use real batch size 1")
+    expected_batch_size = BATCH_SIZE_BY_MODEL[model_family]
+    if runtime.get("batch_size") != expected_batch_size:
+        raise ValueError(
+            f"smoke config must use real batch size {expected_batch_size}"
+        )
     if model_family == "JiT":
         model = config.get("model")
         sampling = config.get("sampling")
@@ -172,7 +176,7 @@ def execution_contract(
         "model_family": model_family,
         "profile": "flux_image_released",
         "probe_depth": 1,
-        "batch_size": 1,
+        "batch_size": BATCH_SIZE_BY_MODEL[model_family],
         "model_core_sha256": next(iter(model_hashes)),
         "sampler_core_sha256": next(iter(sampler_hashes)),
         "checkpoint": {
@@ -235,8 +239,25 @@ def _validate_inputs(
     for key, expected in expected_validation.items():
         if validation.get(key) != expected:
             raise ValueError(f"candidate validation mismatch at {key}")
+    rows = []
+    with metadata_path.resolve(strict=True).open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"candidate metadata line {line_number} is not an object")
+            _finite_tree(row, f"candidate_metadata[{line_number}]")
+            rows.append(row)
+    if len(rows) != expected_count:
+        raise ValueError("candidate metadata row count mismatch")
+    trajectory_ids = {
+        str(row.get("trajectory_id", f"legacy-row-{index}"))
+        for index, row in enumerate(rows)
+    }
+    expected_trajectory_count = len(trajectory_ids)
     trajectory_count = summary.get("trajectory_count")
-    if trajectory_count != expected_count:
+    if trajectory_count != expected_trajectory_count:
         raise ValueError("candidate summary trajectory count mismatch")
     expected_nfe = parity.get("expected_nfe")
     if isinstance(expected_nfe, bool) or not isinstance(expected_nfe, int) or expected_nfe <= 0:
@@ -254,10 +275,10 @@ def _validate_inputs(
     ):
         raise ValueError("resume parity expected forward count is invalid")
     prefix = "sum_" if model_family == "JiT" else ""
-    if summary.get(f"{prefix}total_nfe") != expected_nfe * expected_count:
+    if summary.get(f"{prefix}total_nfe") != expected_nfe * expected_trajectory_count:
         raise ValueError("candidate summary NFE mismatch")
     for key in ("total_stream_calls", "network_forward_count"):
-        if summary.get(f"{prefix}{key}") != expected_forwards * expected_count:
+        if summary.get(f"{prefix}{key}") != expected_forwards * expected_trajectory_count:
             raise ValueError(f"candidate summary {key} mismatch")
     if model_family == "JiT" and summary.get("all_call_counts_valid") is not True:
         raise ValueError("JiT candidate summary call counts are invalid")
@@ -269,18 +290,6 @@ def _validate_inputs(
     resumed = int(summary.get(f"{prefix}resumed_full_count", 0))
     if direct + resumed <= 0:
         raise ValueError("candidate summary contains no Full action")
-    rows = []
-    with metadata_path.resolve(strict=True).open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise ValueError(f"candidate metadata line {line_number} is not an object")
-            _finite_tree(row, f"candidate_metadata[{line_number}]")
-            rows.append(row)
-    if len(rows) != expected_count:
-        raise ValueError("candidate metadata row count mismatch")
     for row in rows:
         if row.get("trajectory_call_count_valid") is not True:
             raise ValueError("candidate metadata call count is invalid")

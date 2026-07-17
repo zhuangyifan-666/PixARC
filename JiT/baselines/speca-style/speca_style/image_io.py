@@ -278,10 +278,13 @@ def resumable_batch_groups(
     interval: int | None,
     max_order: int | None,
     coordinate_mode: str,
+    protocol_batch_size: int,
     resolution: int = 256,
 ) -> tuple[list[list[ManifestRecord]], list[str]]:
     """Skip only complete fixed groups; partial groups fail to preserve gating."""
 
+    if protocol_batch_size <= 0:
+        raise ValueError("protocol_batch_size must be positive")
     groups: dict[str, list[ManifestRecord]] = defaultdict(list)
     for record in manifest:
         if record.shard_id == shard_id:
@@ -314,8 +317,8 @@ def resumable_batch_groups(
                 "checkpoint_path": checkpoint_path,
                 "checkpoint_size": checkpoint_size,
                 "method": method,
-                "real_batch_size": len(values),
-                "effective_cfg_batch_size": 2 * len(values),
+                "real_batch_size": protocol_batch_size,
+                "effective_cfg_batch_size": 2 * protocol_batch_size,
                 "interval": interval,
                 "max_order": max_order,
                 "coordinate_mode": coordinate_mode,

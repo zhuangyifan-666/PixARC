@@ -1,5 +1,7 @@
 # Local-source audit
 
+> Protocol update (2026-07-14): active PixelGen DiCache and matched Full runs use real batch 4/effective CFG batch 8. Historical batch-1 statements below describe the original port audit and are superseded for the primary experiment.
+
 This is an unofficial, clean-room-style DiCache port for PixelGen. Executable behavior, code semantics, and paper/code gaps were derived from the local DiCache clone and its local paper/source artifacts. No network download or network shell command was used for implementation.
 
 ## Revisions and worktrees

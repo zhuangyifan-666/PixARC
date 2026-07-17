@@ -388,8 +388,6 @@ def validate_outputs(
             "checkpoint_size",
             "manifest_sha256",
             "method",
-            "real_batch_size",
-            "effective_cfg_batch_size",
             *DICACHE_CONFIG_FIELDS,
         ):
             if field == "release_gate_sha256" and any(
@@ -400,6 +398,22 @@ def validate_outputs(
             if len(values) != 1:
                 raise ValueError(f"metadata field {field!r} is not consistent")
             result[field] = next(iter(values))
+        # The protocol batch size is fixed, while the final manifest group may
+        # be smaller. Per-trajectory validation above binds each observed size
+        # to its exact sample IDs, so retain the complete observed size set
+        # instead of incorrectly requiring every group to be full-sized.
+        real_batch_sizes = sorted(
+            {int(row["real_batch_size"]) for row in metadata.values()}
+        )
+        effective_cfg_batch_sizes = sorted(
+            {int(row["effective_cfg_batch_size"]) for row in metadata.values()}
+        )
+        result["real_batch_sizes"] = real_batch_sizes
+        result["effective_cfg_batch_sizes"] = effective_cfg_batch_sizes
+        if len(real_batch_sizes) == 1:
+            result["real_batch_size"] = real_batch_sizes[0]
+        if len(effective_cfg_batch_sizes) == 1:
+            result["effective_cfg_batch_size"] = effective_cfg_batch_sizes[0]
     return result
 
 
@@ -416,6 +430,7 @@ def validate_output_run_identity(
         "checkpoint_size",
         "manifest_sha256",
         "method",
+        "batch_size",
         "real_batch_size",
         "effective_cfg_batch_size",
         *DICACHE_CONFIG_FIELDS,
@@ -432,8 +447,6 @@ def validate_output_run_identity(
         "checkpoint_size": run_metadata["checkpoint_size"],
         "manifest_sha256": run_metadata["manifest_sha256"],
         "method": run_metadata["method"],
-        "real_batch_size": run_metadata["real_batch_size"],
-        "effective_cfg_batch_size": run_metadata["effective_cfg_batch_size"],
         **{field: run_metadata[field] for field in DICACHE_CONFIG_FIELDS},
         "resolution": run_metadata["resolution"],
     }
@@ -442,6 +455,27 @@ def validate_output_run_identity(
         for field, value in expected.items()
         if validation.get(field) != value
     ]
+    protocol_batch_size = int(run_metadata["batch_size"])
+    if int(run_metadata["real_batch_size"]) != protocol_batch_size:
+        errors.append("run real_batch_size differs from protocol batch_size")
+    if int(run_metadata["effective_cfg_batch_size"]) != 2 * protocol_batch_size:
+        errors.append("run effective_cfg_batch_size differs from 2 * protocol batch_size")
+    observed_real = validation.get("real_batch_sizes")
+    if observed_real is None and "real_batch_size" in validation:
+        observed_real = [validation["real_batch_size"]]
+    observed_effective = validation.get("effective_cfg_batch_sizes")
+    if observed_effective is None and "effective_cfg_batch_size" in validation:
+        observed_effective = [validation["effective_cfg_batch_size"]]
+    if not isinstance(observed_real, list) or not observed_real:
+        errors.append("validated outputs do not report observed real batch sizes")
+    elif any(int(value) <= 0 or int(value) > protocol_batch_size for value in observed_real):
+        errors.append("observed real batch size is outside the fixed protocol bound")
+    if not isinstance(observed_effective, list) or not observed_effective:
+        errors.append("validated outputs do not report observed CFG batch sizes")
+    elif sorted(int(value) for value in observed_effective) != sorted(
+        2 * int(value) for value in observed_real
+    ):
+        errors.append("observed CFG batch sizes do not equal 2 * observed real batch sizes")
     if errors:
         raise ValueError(
             "validated output metadata is not bound to the run manifest:\n- "

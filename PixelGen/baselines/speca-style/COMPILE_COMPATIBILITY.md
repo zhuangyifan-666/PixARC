@@ -22,6 +22,6 @@ PixelGen may deepcopy the denoiser for EMA and compile the resulting modules. Ea
 
 ## Fair timing
 
-Primary `speedup` is median matched-instrumented-Full latency divided by median SpeCa latency with identical GPU, real batch 1/effective batch 2, checkpoint/EMA, exact-Heun settings, CFG/timeshift, dtype, explicit noise, and compile mode. `instrumented_full` measures split exact blocks without Taylor cache allocation/update or verification. SpeCa timing includes its predictor, Full-action history updates, verifier/reduction/scalar sync/scheduler, combined CFG, sampler, fresh head, unpatchify, cache I/O, and reset. First compile is separate.
+Primary `speedup` is median matched-instrumented-Full latency divided by median SpeCa latency with identical GPU, real batch 4/effective batch 8, checkpoint/EMA, exact-Heun settings, CFG/timeshift, dtype, explicit noise, and compile mode. `instrumented_full` measures split exact blocks without Taylor cache allocation/update or verification. SpeCa timing includes its predictor, Full-action history updates, verifier/reduction/scalar sync/scheduler, combined CFG, sampler, fresh head, unpatchify, cache I/O, and reset. First compile is separate.
 
 No GPU compile was executed in this task. PixelGen deepcopy/EMA compile parity, graph breaks, compile time, latency, and peak memory remain deferred. Until measured, `matched_eager` is the registered primary regime.

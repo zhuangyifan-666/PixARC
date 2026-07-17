@@ -69,6 +69,8 @@ def main() -> None:
     batch_size = runtime.get("batch_size")
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("runtime.batch_size must be a positive integer")
+    if batch_size != 32:
+        raise ValueError("primary JiT SpeCa runs require runtime.batch_size=32")
     records = load_manifest(arguments.manifest.resolve(strict=True))
     if len(records) > arguments.max_records:
         raise ValueError(

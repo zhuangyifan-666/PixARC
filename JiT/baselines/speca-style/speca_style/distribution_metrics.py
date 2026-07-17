@@ -103,13 +103,25 @@ def run_adm_evaluator(
     evaluator_path = Path(evaluator).resolve(strict=True)
     reference_path = Path(reference_npz).resolve(strict=True)
     sample_path = Path(sample_npz).resolve(strict=True)
+    inception_graph = evaluator_path.parent / "classify_image_graph_def.pb"
+    if not inception_graph.is_file():
+        raise FileNotFoundError(
+            "ADM evaluator requires a local classify_image_graph_def.pb next to "
+            f"evaluator.py; refusing an implicit network download: {inception_graph}"
+        )
     process = subprocess.run(
         [sys.executable, str(evaluator_path), str(reference_path), str(sample_path)],
-        check=True,
+        cwd=evaluator_path.parent,
+        check=False,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"ADM evaluator failed with exit status {process.returncode}.\n"
+            f"Evaluator output:\n{process.stdout}"
+        )
     metrics: dict[str, float] = {}
     for name, pattern in METRIC_PATTERNS.items():
         match = pattern.search(process.stdout)

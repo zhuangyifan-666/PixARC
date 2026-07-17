@@ -60,7 +60,7 @@ paired metrics; see `BASELINE_COMPATIBILITY_REPORT.md`.
 
 ## Performance
 
-Single-image latency, common-batch throughput, and four-GPU 50K wall clock are
+Batch-4 per-image latency, throughput, and four-GPU 50K wall clock are
 different metrics and must be reported separately. Primary `speedup` uses
 matched compile modes and median per-image latency. See
 `COMPILE_COMPATIBILITY.md` and `MEMORY_REPORT.md`.

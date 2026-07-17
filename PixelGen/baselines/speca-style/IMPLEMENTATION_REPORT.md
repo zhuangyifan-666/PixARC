@@ -1,5 +1,7 @@
 # PixelGen SpeCa implementation report
 
+> Protocol update (2026-07-14): the active experiment uses real batch 4/effective CFG batch 8. Batch-1 answers retained below are historical audit context and are superseded for generation, selection, latency, and matched Full comparison.
+
 This report answers the required handoff questions for the unofficial PixelGen port. Inspection is not reported as an executed test, and every CUDA-dependent result is deferred.
 
 1. **Cache4Diffusion commit?** `91a1949fcc88acab46547f0b5f295f5de2df2870`.

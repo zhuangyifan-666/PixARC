@@ -34,6 +34,7 @@ from .metadata import (
     PAIRING_FIELDS,
     atomic_write_json,
     load_json,
+    validate_archived_model_configs,
     validate_full_seacache_roles,
     validate_run_artifacts,
 )
@@ -80,17 +81,26 @@ def build_adm_sample_npz(
             dtype=np.uint8,
             shape=(len(ids), resolution, resolution, 3),
         )
-        for index, sample_id in enumerate(ids):
-            with Image.open(image_path(sample_dir, sample_id)) as image:
-                image.load()
-                if image.mode != "RGB" or image.size != (resolution, resolution):
-                    raise ValueError(f"invalid sample {sample_id}: {image.mode} {image.size}")
-                value = np.asarray(image)
-                if value.dtype != np.uint8:
-                    raise ValueError(f"sample {sample_id} is not uint8")
-                array[index] = value
-        array.flush()
-        np.savez(destination, arr_0=array)
+        try:
+            for index, sample_id in enumerate(ids):
+                with Image.open(image_path(sample_dir, sample_id)) as image:
+                    image.load()
+                    if image.mode != "RGB" or image.size != (resolution, resolution):
+                        raise ValueError(
+                            f"invalid sample {sample_id}: {image.mode} {image.size}"
+                        )
+                    value = np.asarray(image)
+                    if value.dtype != np.uint8:
+                        raise ValueError(f"sample {sample_id} is not uint8")
+                    array[index] = value
+            array.flush()
+            np.savez(destination, arr_0=array)
+        finally:
+            array.flush()
+            mmap = getattr(array, "_mmap", None)
+            if mmap is not None:
+                mmap.close()
+            del array
 
 
 def run_adm_evaluator(
@@ -105,6 +115,7 @@ def run_adm_evaluator(
     process = subprocess.run(
         [sys.executable, str(evaluator_path), str(reference_path), str(sample_path)],
         check=True,
+        cwd=str(evaluator_path.parent),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -144,7 +155,6 @@ def distribution_deltas(
         "evaluator_path",
         "evaluator_sha256",
         "image_conversion_protocol",
-        "run_identity",
     )
     context_errors = []
     for field in context_fields:
@@ -154,6 +164,34 @@ def distribution_deltas(
             context_errors.append(
                 f"{field}: Full={full[field]!r}, SeaCache={seacache[field]!r}"
             )
+    full_identity = full.get("run_identity")
+    seacache_identity = seacache.get("run_identity")
+    if not isinstance(full_identity, dict) or not isinstance(seacache_identity, dict):
+        context_errors.append("missing or invalid run_identity mapping")
+    else:
+        for field in PAIRING_FIELDS:
+            if field == "model_config_hash":
+                continue
+            if field not in full_identity or field not in seacache_identity:
+                context_errors.append(f"run_identity missing field {field!r}")
+            elif full_identity[field] != seacache_identity[field]:
+                context_errors.append(
+                    f"run_identity.{field}: Full={full_identity[field]!r}, "
+                    f"SeaCache={seacache_identity[field]!r}"
+                )
+        if full_identity.get("model_config_hash") != seacache_identity.get(
+            "model_config_hash"
+        ):
+            try:
+                full_root = Path(str(full["run_metadata"])).resolve(strict=True).parent
+                seacache_root = Path(str(seacache["run_metadata"])).resolve(
+                    strict=True
+                ).parent
+                validate_archived_model_configs(full_root, seacache_root)
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                context_errors.append(
+                    f"model_config_hash differs without equivalent archived models: {error}"
+                )
     if context_errors:
         raise ValueError(
             "distribution runs are not comparable:\n- " + "\n- ".join(context_errors)

@@ -18,6 +18,7 @@ import yaml
 SCHEMA_VERSION = "pixarc-dicache-selection-decision-v1"
 PROFILE = "flux_image_released"
 EXPECTED_VALIDATION_SAMPLES = 8000
+BATCH_SIZE_BY_MODEL = {"JiT": 32, "PixelGen": 4}
 GAMMA_POLICIES = (
     "official_propagate",
     "latest_residual_fallback",
@@ -165,7 +166,7 @@ def _candidate_identity(
 
 
 def _validate_paired(
-    report: Mapping[str, Any], threshold: float, gamma_policy: str
+    report: Mapping[str, Any], threshold: float, gamma_policy: str, _model_family: str
 ) -> dict[str, Any]:
     if report.get("sample_count") != EXPECTED_VALIDATION_SAMPLES:
         raise ValueError("paired selection report must contain exactly 8000 samples")
@@ -258,7 +259,7 @@ def _validate_paired(
 
 
 def _validate_trace(
-    report: Mapping[str, Any], threshold: float, gamma_policy: str
+    report: Mapping[str, Any], threshold: float, gamma_policy: str, _model_family: str
 ) -> dict[str, Any]:
     if report.get("trajectory_count") != EXPECTED_VALIDATION_SAMPLES:
         raise ValueError("candidate trace report must contain exactly 8000 trajectories")
@@ -309,15 +310,19 @@ def _positive_latencies(value: Any, role: str) -> None:
 
 
 def _validate_benchmark(
-    report: Mapping[str, Any], threshold: float, gamma_policy: str
+    report: Mapping[str, Any], threshold: float, gamma_policy: str, model_family: str
 ) -> dict[str, Any]:
     protocol = report.get("protocol")
     full = report.get("full")
     candidate = report.get("dicache")
     if not all(isinstance(value, Mapping) for value in (protocol, full, candidate)):
         raise ValueError("benchmark report lacks protocol/full/dicache mappings")
-    if protocol.get("batch_size") != 1:
-        raise ValueError("selection benchmark must use real batch size 1")
+    expected_batch_size = BATCH_SIZE_BY_MODEL[model_family]
+    if protocol.get("batch_size") != expected_batch_size:
+        raise ValueError(
+            f"selection benchmark must use real batch size {expected_batch_size} "
+            f"for {model_family}"
+        )
     if protocol.get("compile_mode") != "matched_eager":
         raise ValueError("selection benchmark must use matched_eager")
     config_path_value = protocol.get("input_config")
@@ -406,7 +411,7 @@ def _validate_benchmark(
 
 
 VALIDATORS: dict[
-    str, Callable[[Mapping[str, Any], float, str], dict[str, Any]]
+    str, Callable[[Mapping[str, Any], float, str, str], dict[str, Any]]
 ] = {
     "paired": _validate_paired,
     "trace": _validate_trace,
@@ -466,7 +471,9 @@ def validate_selection_decision(
         path = Path(path_value).resolve(strict=True)
         if _sha256(path) != digest:
             raise ValueError(f"{role} evidence SHA-256 changed after decision")
-        evidence_identity = validator(_load(path), threshold, gamma_policy)
+        evidence_identity = validator(
+            _load(path), threshold, gamma_policy, model_family
+        )
         if candidate_identity is None:
             candidate_identity = evidence_identity
         elif evidence_identity != candidate_identity:

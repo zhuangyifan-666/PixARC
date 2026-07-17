@@ -52,15 +52,13 @@ JiT inserts 32 class-context tokens at `in_context_start`. Full and verifier-exa
 
 The upstream JiT CFG path calls conditional and unconditional models separately. The port keeps independent factor histories but one shared action, coordinate, check flag, threshold, and previous error. Verification sufficient statistics are combined exactly as if cond/uncond payloads were concatenated before applying the official metric. The scheduler advances only after both streams complete.
 
-This differs deliberately from the sibling PixelGen port: PixelGen preserves one combined effective-`2B` `[unconditional, conditional]` forward and one combined history, whereas JiT preserves two batch-1 forwards and two histories. Neither port changes its upstream CFG layout.
+This differs deliberately from the sibling PixelGen port: PixelGen preserves one combined effective-`2B` `[unconditional, conditional]` forward and one combined history, whereas JiT preserves two batch-32 forwards and two histories. Neither port changes its upstream CFG layout.
 
 At 50 Heun steps, the derived sequence has 99 NFE decisions and 198 JiT forwards (99 per stream). Continuous `t` repeats across corrector/predictor boundaries with different states, so Taylor coordinates use monotonic `q=total_nfe-1-nfe_index`, not `t`. See [`HEUN_ADAPTATION.md`](HEUN_ADAPTATION.md).
 
 ## Batch protocol
 
-Main generation uses one real sample per GPU process. Each NFE has two batch-1 stream forwards; this preserves a per-real-sample interpretation despite the released batch-global gate. Every main manifest also fixes one real sample per `batch_group_id`.
-
-A real batch larger than one is a separately labeled grouped-batch SpeCa experiment, requires a new manifest and tuning, and cannot be mixed with main results. Dynamic per-sample ragged grouping is deliberately not implemented. See [`BATCH_SEMANTICS.md`](BATCH_SEMANTICS.md).
+Main generation uses 32 real samples per GPU process. Each NFE has two batch-32 stream forwards. The released gate is batch-global, so all 32 samples in a branch share one action; this is the registered grouped-batch SpeCa protocol and must be used for matched Full, tuning, latency, and final generation. Dynamic per-sample ragged grouping is deliberately not implemented. See [`BATCH_SEMANTICS.md`](BATCH_SEMANTICS.md).
 
 ## Checkpoint, EMA, compile, and memory
 
@@ -68,7 +66,7 @@ Checkpoint and EMA selection/loading order are inherited. Explicit manifest nois
 
 The primary speedup comparison is `instrumented_full` versus `speca` with identical `matched_eager` or validated `blockwise` mode. The denominator executes the same split exact blocks but deliberately carries no draft-cache allocation/history update/verifier overhead; only a Full action inside adaptive `speca` updates Taylor history. Upstream-compiled Full divided by eager SpeCa is invalid. Compile time is separate and scheduler/dynamic state stays outside compiled regions. See [`COMPILE_COMPATIBILITY.md`](COMPILE_COMPATIBILITY.md).
 
-For main BF16 batch 1, order 4, the analytic JiT Taylor cache is 102,236,160 bytes (240 tensors); explicit verifier temporaries add a lower-bound 4,423,680 bytes. Kernel workspaces and CUDA peaks are unmeasured. No Lite predictor, cache quantization, order reduction, CPU offload, or layer dropping is allowed silently. See [`MEMORY_REPORT.md`](MEMORY_REPORT.md).
+Memory planning and measured peaks must use BF16 batch 32. Kernel workspaces and CUDA peaks are measured separately from the analytic cache estimate. No Lite predictor, cache quantization, order reduction, CPU offload, or layer dropping is allowed silently. See [`MEMORY_REPORT.md`](MEMORY_REPORT.md).
 
 ## Reproducible generation
 
@@ -76,13 +74,13 @@ The manifest records sample/class IDs, per-sample seed, four-way shard, position
 
 Outputs use an explicit external `OUTPUT_ROOT`, atomic temporary-file rename, per-rank JSONL metadata, resolved config, run manifest, summaries, and logs. A non-empty mismatched destination fails. Resume skips only validated matching records and never changes batch grouping or carries history across batches.
 
-The existing/planned JiT Full batch-32 reference is **`PAIRED_METRICS_BLOCKED`** against main batch-1 SpeCa. It may be used for independently validated distribution metrics, but never PSNR/SSIM/LPIPS by filename. A new batch-1 manifest-backed matched Full is required; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).
+Legacy JiT Full outputs remain **`PAIRED_METRICS_BLOCKED`** unless their immutable manifest, noise, grouping, checkpoint, sampler, and postprocessing identities match. Generate the matched Full and SpeCa outputs from the same batch-32 manifest; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).
 
 ## Evaluation and performance
 
 After exact output validation, distribution evaluation supports FID, sFID, Inception Score, precision, and recall with one fixed local ADM evaluator/reference NPZ. Strict paired evaluation supports aggregate/per-image PSNR, SSIM, and AlexNet LPIPS from saved RGB uint8 PNGs only after metadata proves identical noise and generation conditions. Missing evaluator, reference NPZ, LPIPS package, or local weights is a hard error/skip; tools do not download or substitute.
 
-Latency uses synchronized CUDA events after inputs are resident and before CPU copy/PNG. It includes embeddings, AdaLN/gates, exact work, forecasting, history, verifier/reduction/scalar sync, scheduler, CFG, Heun, fresh head/unpatchify, cache I/O, and reset. It reports batch-1 latency, common-batch throughput, and four-GPU wall clock separately. `speedup = median_matched_full / median_speca`; the old 50K wall clock is not a denominator.
+Latency uses synchronized CUDA events after inputs are resident and before CPU copy/PNG. It includes embeddings, AdaLN/gates, exact work, forecasting, history, verifier/reduction/scalar sync, scheduler, CFG, Heun, fresh head/unpatchify, cache I/O, and reset. It reports batch-32 per-image latency, throughput, and four-GPU wall clock. `speedup = median_matched_full / median_speca`; the old 50K wall clock is not a denominator.
 
 Real timing reports `verification_block_time_ms`, `metric_reduction_time_ms`/`error_reduction_time_ms`, and `scalar_sync_time_ms`. The registered total-sampling definition is `verification_overhead_ratio = (verification_block_time + error_reduction_time + scalar_sync_time) / total_sampling_time`; the trace aggregator's ratio within its measured subcomponents is diagnostic and cannot replace the CUDA-event denominator.
 

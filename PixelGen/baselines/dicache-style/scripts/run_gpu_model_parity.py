@@ -212,6 +212,7 @@ def _benchmark_runner_from_arguments(arguments: argparse.Namespace) -> dict[str,
     return {
         "model_config": arguments.model_config,
         "manifest": str(manifest),
+        "purpose": "model_parity",
         "batch_size": 1,
         "sample_ids": [sample_id],
         "seeds": [seed],

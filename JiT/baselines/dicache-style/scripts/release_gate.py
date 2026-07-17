@@ -29,6 +29,7 @@ from record_smoke_gate import execution_contract, validate_smoke_gate
 
 SCHEMA_VERSION = "pixarc-dicache-release-gate-v1"
 PROFILE = "flux_image_released"
+BATCH_SIZE_BY_MODEL = {"JiT": 32, "PixelGen": 4}
 FULL_MODES = ("upstream_full", "instrumented_full")
 JIT_COMPILE_MODES = {
     "upstream": ("upstream", "upstream_full", ("full",)),
@@ -108,7 +109,9 @@ def _validate_evidence(
     }
 
 
-def _config_core(config: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+def _config_core(
+    config: Mapping[str, Any], model_family: str
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     if config.get("schema_version") != "pixarc-dicache-config-v1":
         raise ValueError("release configs must use pixarc-dicache-config-v1")
     dicache = config.get("dicache")
@@ -119,8 +122,14 @@ def _config_core(config: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[
         raise ValueError(f"release config profile must be {PROFILE}")
     if dicache.get("probe_depth") != 1 or isinstance(dicache.get("probe_depth"), bool):
         raise ValueError("release config probe_depth must be integer 1")
-    if runtime.get("batch_size") != 1 or isinstance(runtime.get("batch_size"), bool):
-        raise ValueError("release config runtime.batch_size must be integer 1")
+    expected_batch_size = BATCH_SIZE_BY_MODEL[model_family]
+    if (
+        runtime.get("batch_size") != expected_batch_size
+        or isinstance(runtime.get("batch_size"), bool)
+    ):
+        raise ValueError(
+            f"release config runtime.batch_size must be integer {expected_batch_size}"
+        )
     return dicache, runtime
 
 
@@ -143,7 +152,7 @@ def _validate_provenance(
         raise ValueError("config selection provenance model_family mismatch")
     if provenance.get("profile") != PROFILE:
         raise ValueError("config selection provenance profile mismatch")
-    if provenance.get("batch_size") != 1:
+    if provenance.get("batch_size") != BATCH_SIZE_BY_MODEL[expected_model_family]:
         raise ValueError("config selection provenance batch_size mismatch")
     if provenance.get("final_50k_used_for_selection") is not False:
         raise ValueError("config provenance must exclude final 50K from selection")
@@ -182,8 +191,8 @@ def _validate_release_configs(
     selection: Mapping[str, Any],
     selection_sha256: str,
 ) -> None:
-    full_dicache, full_runtime = _config_core(full_config)
-    candidate_dicache, candidate_runtime = _config_core(candidate_config)
+    full_dicache, full_runtime = _config_core(full_config, model_family)
+    candidate_dicache, candidate_runtime = _config_core(candidate_config, model_family)
     if full_dicache.get("mode") not in FULL_MODES:
         raise ValueError(f"full config mode must be one of {FULL_MODES}")
     if candidate_dicache.get("mode") != "dicache":
@@ -220,16 +229,16 @@ def _validate_release_configs(
         ):
             trainer = config.get("trainer")
             data = config.get("data")
-            if runtime.get("effective_cfg_batch_size") != 2:
+            if runtime.get("effective_cfg_batch_size") != 8:
                 raise ValueError(
-                    f"PixelGen {role} effective_cfg_batch_size must be 2"
+                    f"PixelGen {role} effective_cfg_batch_size must be 8"
                 )
             if runtime.get("precision") != "bf16-mixed":
                 raise ValueError(f"PixelGen {role} runtime precision must be bf16-mixed")
             if not isinstance(trainer, Mapping) or trainer.get("precision") != "bf16-mixed":
                 raise ValueError(f"PixelGen {role} trainer precision must be bf16-mixed")
-            if not isinstance(data, Mapping) or data.get("pred_batch_size") != 1:
-                raise ValueError(f"PixelGen {role} pred_batch_size must be 1")
+            if not isinstance(data, Mapping) or data.get("pred_batch_size") != 4:
+                raise ValueError(f"PixelGen {role} pred_batch_size must be 4")
     else:
         raise ValueError(f"unsupported release model_family: {model_family}")
     _validate_provenance(
@@ -377,7 +386,7 @@ def _validate_compile_report(
                 or row.get("full_mode") != full_mode
                 or row_protocol.get("compile_mode") != compile_mode
                 or row_protocol.get("input_config_hash") != candidate_hash
-                or row_protocol.get("batch_size") != 1
+                or row_protocol.get("batch_size") != 32
             ):
                 raise ValueError(f"JiT compile mode {mode} contract mismatch")
             if (
@@ -419,10 +428,10 @@ def _validate_compile_report(
             raise ValueError("PixelGen compile matrix must contain exactly five rows")
         if set(rows) != set(PIXEL_COMPILE_ROWS):
             raise ValueError("PixelGen compile report must retain exactly five source rows")
-        if identity.get("batch_size") != 1 or identity.get(
+        if identity.get("batch_size") != 4 or identity.get(
             "effective_cfg_batch_size"
-        ) != 2:
-            raise ValueError("PixelGen compile identity must use sample-adaptive batch 1")
+        ) != 8:
+            raise ValueError("PixelGen compile identity must use real batch 4 / CFG batch 8")
         if (
             identity.get("checkpoint_sha256") != checkpoint_sha
             or identity.get("manifest_sha256") != manifest_sha
@@ -605,7 +614,7 @@ def create_gate(arguments: argparse.Namespace) -> dict[str, Any]:
             "rel_l1_thresh": selection["rel_l1_thresh"],
             "gamma_nonfinite_policy": selection["gamma_nonfinite_policy"],
             "probe_depth": 1,
-            "batch_size": 1,
+            "batch_size": BATCH_SIZE_BY_MODEL[arguments.model_family],
         },
     }
     require_source_identity_current(
@@ -719,7 +728,7 @@ def verify_gate(arguments: argparse.Namespace) -> dict[str, Any]:
         "rel_l1_thresh": selection["rel_l1_thresh"],
         "gamma_nonfinite_policy": selection["gamma_nonfinite_policy"],
         "probe_depth": 1,
-        "batch_size": 1,
+        "batch_size": BATCH_SIZE_BY_MODEL[arguments.model_family],
     }:
         raise ValueError("release gate candidate contract mismatch")
     supplied_manifest = arguments.manifest.resolve(strict=True)

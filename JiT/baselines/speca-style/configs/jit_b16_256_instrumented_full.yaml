@@ -37,6 +37,5 @@ speca:
   cache_dtype: inherit
   trace_mode: summary
 runtime:
-  batch_size: 1
+  batch_size: 32
   compile_mode: matched_eager
-

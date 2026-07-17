@@ -82,7 +82,7 @@ def _selection_decision(path: Path, threshold: float, policy: str) -> Path:
     })
     _write_json(benchmark, {
         "protocol": {
-            "batch_size": 1, "compile_mode": "matched_eager",
+            "batch_size": 32, "compile_mode": "matched_eager",
             "input_config": str(benchmark_config_path.resolve()),
             "input_config_hash": config_hash,
             "dicache_config_hash": dicache_hash,
@@ -122,7 +122,7 @@ def _selection(
                 "model_family": "JiT",
                 "profile": "flux_image_released",
                 "probe_depth": probe_depth,
-                "batch_size": 1,
+                "batch_size": 32,
                 "rel_l1_thresh": threshold,
                 "gamma_nonfinite_policy": policy,
                 "final_50k_used_for_selection": False,

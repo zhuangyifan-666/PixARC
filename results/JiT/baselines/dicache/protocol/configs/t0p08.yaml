@@ -1,0 +1,63 @@
+schema_version: pixarc-dicache-config-v1
+model:
+  variant: JiT-B/16
+  checkpoint: /mnt/iset/nfs-main/private/zhuangyifan/PixARC/JiT/checkpoints/JiT-B-16-256/checkpoint-last.pth
+  image_size: 256
+  num_classes: 1000
+  ema: model_ema1
+  args:
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+sampling:
+  method: heun
+  steps: 50
+  exact_heun: true
+  cfg_scale: 3.0
+  guidance_interval:
+  - 0.1
+  - 1.0
+  noise_scale: 1.0
+  dtype: bfloat16
+dicache:
+  mode: dicache
+  profile: flux_image_released
+  probe_depth: 1
+  error_choice: delta_y
+  rel_l1_thresh: 0.08
+  ret_ratio: 0.2
+  gamma_min: 1.0
+  gamma_max: 1.5
+  warmup_semantics: flux_inclusive
+  gate_mode: batch_global
+  threshold_compare: strict_less_for_reuse
+  probe_token_scope: image_tokens
+  dcta_order: 1
+  residual_anchor_count: 2
+  numeric_mode: official_no_epsilon
+  epsilon: 1.0e-08
+  nonfinite_policy: force_full_reset_and_log
+  gamma_nonfinite_policy: official_propagate
+  force_last_full: true
+  cache_dtype: inherit
+  trace_mode: summary
+runtime:
+  batch_size: 32
+  protocol: grouped_batch
+  compile_mode: matched_eager
+selection_provenance:
+  schema_version: pixarc-dicache-selection-v1
+  selection_report_sha256: 78a46e7bdd25f8300291cb4dc7eccbbf218019aabb1d2b66775162b74b11caa0
+  selection_report_name: t0p08_provisional.json
+  status: provisional
+  passed: true
+  model_family: JiT
+  profile: flux_image_released
+  probe_depth: 1
+  batch_size: 32
+  rel_l1_thresh: 0.08
+  gamma_nonfinite_policy: official_propagate
+  final_50k_used_for_selection: false
+  decision: null
+  threshold_selected_before_final_50k: false
+  gamma_policy_preregistered: false
+  checkpoint_resolved_absolute: true

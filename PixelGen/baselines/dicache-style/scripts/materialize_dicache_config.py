@@ -93,8 +93,11 @@ def main() -> None:
         denoiser["init_args"]["dicache_gamma_nonfinite_policy"] = args.gamma_nonfinite_policy
     if dicache.get("profile") != "flux_image_released":
         raise ValueError("selection provenance requires profile=flux_image_released")
-    if runtime.get("batch_size") != 1:
-        raise ValueError("selection provenance requires runtime.batch_size=1")
+    if runtime.get("batch_size") != 4 or runtime.get("effective_cfg_batch_size") != 8:
+        raise ValueError(
+            "selection provenance requires runtime.batch_size=4 and "
+            "runtime.effective_cfg_batch_size=8"
+        )
     selection_path = args.selection_report.resolve(strict=True)
     selection = validate_selection_report(
         load_json_object(selection_path),

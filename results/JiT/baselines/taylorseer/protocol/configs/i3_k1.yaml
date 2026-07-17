@@ -1,0 +1,32 @@
+schema_version: pixarc-taylorseer-config-v1
+model:
+  variant: JiT-B/16
+  checkpoint: /mnt/iset/nfs-main/private/zhuangyifan/PixARC/JiT/checkpoints/JiT-B-16-256/checkpoint-last.pth
+  image_size: 256
+  num_classes: 1000
+  ema: model_ema1
+  args:
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+sampling:
+  method: heun
+  steps: 50
+  exact_heun: true
+  cfg_scale: 3.0
+  guidance_interval:
+  - 0.1
+  - 1.0
+  noise_scale: 1.0
+  dtype: bfloat16
+taylorseer:
+  mode: taylorseer
+  interval: 3
+  max_order: 1
+  first_enhance: 2
+  coordinate_mode: official_nfe_index
+  force_last_full: false
+  cache_dtype: inherit
+  trace_mode: summary
+runtime:
+  batch_size: 32
+  compile_mode: matched_eager

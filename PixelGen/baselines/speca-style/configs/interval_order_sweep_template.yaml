@@ -7,8 +7,8 @@ fixed:
   scheduler_mode: fixed_taylor_draft
   first_enhance: 2
   coordinate_mode: official_nfe_index
-  real_batch_size: 1
-  effective_cfg_batch_size: 2
+  real_batch_size: 4
+  effective_cfg_batch_size: 8
 sweep:
   interval: [2, 3, 4, 5]
   max_order: [1, 2, 3, 4]

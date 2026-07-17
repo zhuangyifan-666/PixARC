@@ -1,0 +1,23 @@
+{
+  "base_seed": 202607140000,
+  "batch_grouping": "within each modulo shard, contiguous position_in_shard groups of batch_size with fixed position_in_batch",
+  "batch_size": 32,
+  "class_assignment": "class_id=sample_id//samples_per_class",
+  "generator_algorithm": "per_sample_torch_generator_manual_seed",
+  "generator_device": "cpu",
+  "manifest_records_sha256": "309dd400696833bfd9f70fc283a4b2fd893111735e24b4fc17ac89c7e7404ee4",
+  "manifest_sha256": "e8ddfb2a2470661b7fbc46bd9077c2432195ae2b6986a5b466a760f68797bc1c",
+  "manifest_version": "pixarc-imagenet-c2i-v1",
+  "noise_construction_protocol": "for each manifest record create an independent torch.Generator on the recorded device, manual_seed(record.seed), draw one torch.randn tensor with the recorded shape/dtype, then stack in fixed batch position order; model-specific noise_scale is applied after construction",
+  "noise_dtype": "float32",
+  "noise_shape": [
+    3,
+    256,
+    256
+  ],
+  "pytorch_version": "2.5.1+cu124",
+  "record_count": 1000,
+  "rng_algorithm": "PyTorch Generator implementation selected by the recorded PyTorch version and generator device",
+  "shard_rule": "shard_id=sample_id%world_size",
+  "world_size": 4
+}

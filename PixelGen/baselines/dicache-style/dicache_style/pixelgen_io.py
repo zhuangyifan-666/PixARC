@@ -98,6 +98,7 @@ class ManifestNoiseDataset(Dataset):
             checkpoint_path=checkpoint_path,
             checkpoint_size=checkpoint_size,
             method=method,
+            protocol_batch_size=batch_size,
             resolution=resolution,
         )
         self.records = [record for group in pending for record in group]

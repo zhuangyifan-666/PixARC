@@ -138,9 +138,9 @@ def _protocol(mode: str) -> dict[str, object]:
         "steps": 4,
         "cfg_scale": 3.0,
         "guidance_interval": [0.1, 1.0],
-        "sample_ids": [0],
-        "seeds": [123],
-        "class_ids": [7],
+        "sample_ids": list(range(32)),
+        "seeds": list(range(123, 155)),
+        "class_ids": [7] * 32,
         "manifest_sha256": "manifest-sha",
         "rel_l1_thresh": 0.1,
         "noise_scale": 1.0,
@@ -149,8 +149,8 @@ def _protocol(mode: str) -> dict[str, object]:
         "compile_mode": contract["compile_mode"],
         "full_mode": contract["full_mode"],
         "compile_scope": contract["compile_scope"],
-        "batch_size": 1,
-        "effective_cfg_batch_size": 2,
+        "batch_size": 32,
+        "effective_cfg_batch_size": 64,
         "dtype": "bfloat16",
         "expected_nfe": 7,
         "expected_network_forward_count": 14,
@@ -295,11 +295,11 @@ def test_runner_override_routes_only_legal_full_modes(tmp_path: Path):
     config["dicache"]["gamma_nonfinite_policy"] = "force_full"
     manifest = tmp_path / "benchmark.jsonl"
     records = build_manifest(
-        samples_per_class=1,
+        samples_per_class=32,
         base_seed=123,
         split_name="benchmark",
         world_size=1,
-        batch_size=1,
+        batch_size=32,
         num_classes=1,
     )
     write_manifest(
@@ -307,14 +307,14 @@ def test_runner_override_routes_only_legal_full_modes(tmp_path: Path):
         manifest,
         base_seed=123,
         world_size=1,
-        batch_size=1,
+        batch_size=32,
         generator_device="cpu",
     )
     runner = {
-        "batch_size": 1,
-        "sample_ids": [0],
-        "seeds": [123],
-        "class_ids": [0],
+        "batch_size": 32,
+        "sample_ids": [record.sample_id for record in records],
+        "seeds": [record.seed for record in records],
+        "class_ids": [record.class_id for record in records],
         "manifest": str(manifest),
         "batch_group_id": records[0].batch_group_id,
         "compile_mode_override": "upstream",

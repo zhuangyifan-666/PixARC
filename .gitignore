@@ -22,11 +22,20 @@ output/
 outputs/
 output_dir/
 runs/
+logs/
 wandb/
 lightning_logs/
 workdirs/
 universal_pix_workdirs/
 universal_pix_t2i_workdirs/
+
+# Large/generated evaluator assets
+classify_image_graph_def.pb
+
+# Local result evidence retained outside Git
+# Keep results/*.csv, Markdown reports, and frozen protocol files tracked.
+/results/*/baselines/*/raw/
+/results/**/CHECKSUMS.sha256
 
 # Python bytecode and tool caches
 __pycache__/
@@ -37,8 +46,11 @@ __pycache__/
 .ruff_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .ipynb_checkpoints/
+.tox/
+.nox/
 
 # Virtual environments and packaging artifacts
 .venv/
@@ -52,6 +64,8 @@ dist/
 .env
 .env.*
 !.env.example
+/.secrets/
+/credentials.json
 
 # Editors and operating-system files
 .vscode/
@@ -64,5 +78,19 @@ dist/
 
 # Logs and temporary files
 *.log
+*.pid
+*.pid.lock
+*.latest_log
+nohup.out
 *.tmp
 *.temp
+.nfs*
+core
+core.*
+
+# Profiling and tracing artifacts
+*.prof
+*.nsys-rep
+*.qdrep
+*.sqlite
+events.out.tfevents.*

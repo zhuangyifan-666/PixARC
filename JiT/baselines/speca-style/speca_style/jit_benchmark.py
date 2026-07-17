@@ -101,8 +101,8 @@ def build_benchmark_spec(runner: Mapping[str, Any]) -> BenchmarkSpec:
         raise ValueError("sampling.noise_scale must be finite and non-negative")
     runtime = dict(config["runtime"])
     batch_size = int(runner.get("batch_size", runtime["batch_size"]))
-    if batch_size < 1:
-        raise ValueError("benchmark batch_size must be positive")
+    if int(runtime["batch_size"]) != 32 or batch_size != 32:
+        raise ValueError("JiT SpeCa latency requires real batch_size=32")
     sample_ids = tuple(int(value) for value in runner["sample_ids"])
     seeds = tuple(int(value) for value in runner["seeds"])
     labels_values = tuple(int(value) for value in runner["class_ids"])

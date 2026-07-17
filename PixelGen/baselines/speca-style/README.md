@@ -55,7 +55,7 @@ cfg_x         = cat([x, x], dim=0)
 cfg_condition = cat([uncondition, condition], dim=0)
 ```
 
-One combined `[unconditional, conditional]` effective-`2B` forward owns one history, one scheduler, and one metric. It is never split, reordered, half-verified, or independently scheduled. Main real batch is 1, hence effective batch 2.
+One combined `[unconditional, conditional]` effective-`2B` forward owns one history, one scheduler, and one metric. It is never split, reordered, half-verified, or independently scheduled. Main real batch is 4, hence effective batch 8.
 
 This differs deliberately from the sibling JiT port: JiT keeps separate conditional and unconditional Taylor histories while sharing one scheduler and combines verification sufficient statistics exactly as if the two stream payloads were concatenated. Neither port changes its upstream CFG execution layout.
 
@@ -67,27 +67,27 @@ For `exact_henu=true`, 50 steps derive 99 decisions/combined forwards. Continuou
 
 Checkpoint/EMA selection remains upstream-compatible. PixelGen may deepcopy the denoiser for `ema_denoiser`; runtime state is non-persistent and every copy starts empty/independent. Prediction keeps the same EMA policy. Each batch calls trajectory begin and guarantees end/reset in `finally`, preventing factor/error/counter leakage.
 
-Real batch 1 is the registered protocol because the released metric/action is batch-global. A larger real batch is separately labeled grouped-batch SpeCa, uses effective `2B`, requires a new manifest/tuning, and cannot be mixed with main results or called strictly sample-adaptive. See [`BATCH_SEMANTICS.md`](BATCH_SEMANTICS.md).
+Real batch 4/effective batch 8 is the registered grouped-batch protocol. The released metric/action is batch-global, so all four real samples share one action. Manifest grouping, threshold selection, matched Full, latency, and final generation must all use this protocol; it is not described as strictly sample-adaptive. See [`BATCH_SEMANTICS.md`](BATCH_SEMANTICS.md).
 
 ## Compile and memory
 
 Primary speedup compares `instrumented_full` and `speca` under the same `matched_eager` or validated `blockwise` mode. The denominator executes the same split exact blocks but carries no Taylor history allocation/update or verifier; only Full actions inside adaptive `speca` update draft history. An upstream-compiled Full/eager-SpeCa quotient is invalid. Scheduler/state/`.item()` stay outside compiled regions and compile time is separate. EMA/deepcopy compile independence must be tested on GPU. See [`COMPILE_COMPATIBILITY.md`](COMPILE_COMPATIBILITY.md).
 
-At real batch 1/effective 2, BF16 order 4, the analytic Taylor cache is 359,792,640 bytes (280 tensors); explicit verifier temporary lower bound is 10,616,832 bytes. This excludes attention/compiler/CUDA workspaces and is not a 3090 peak. No silent Lite, order reduction, dtype change, offload, compression, or layer dropping is allowed. See [`MEMORY_REPORT.md`](MEMORY_REPORT.md).
+Memory planning and measured peaks must use real batch 4/effective batch 8. Analytic cache estimates exclude attention/compiler/CUDA workspaces and are not GPU peak measurements. No silent Lite, order reduction, dtype change, offload, compression, or layer dropping is allowed. See [`MEMORY_REPORT.md`](MEMORY_REPORT.md).
 
 ## Manifest, outputs, and current reference
 
-The immutable manifest records sample/class IDs, per-sample seeds, four-way shard, position, one-sample batch group, split, noise protocol, and sidecar hash. Final is 50,000 samples, exactly 50/class and 12,500/rank; validation is 8,000, exactly 8/class, with disjoint seeds. Noise is per-sample explicit and independent of rank order, resume, earlier samples, and SpeCa actions.
+The immutable manifest records sample/class IDs, per-sample seeds, four-way shard, position, fixed batch-4 group, split, noise protocol, and sidecar hash. Final is 50,000 samples, exactly 50/class and 12,500/rank; validation is 8,000, exactly 8/class, with disjoint seeds. Noise is per-sample explicit and independent of rank order, resume, earlier samples, and SpeCa actions.
 
 Generation writes only to explicit external `OUTPUT_ROOT` using atomic rename, resolved config/run manifest, per-rank JSONL, summaries, and logs. A non-empty incompatible destination fails. Resume skips only matching valid records, preserves grouping, and resets SpeCa per batch.
 
-The current PixelGen Full real-batch-4 reference is **`PAIRED_METRICS_BLOCKED`** against main batch-1 SpeCa because exact noise/RNG/group replay is not proven. It can support validated unpaired distribution metrics but never PSNR/SSIM/LPIPS by filename. A new manifest-backed batch-1 matched Full is required; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).
+Legacy PixelGen Full outputs remain **`PAIRED_METRICS_BLOCKED`** unless exact noise/RNG/group replay is proven. Generate a new manifest-backed batch-4 matched Full for strict pairing; see [`BASELINE_COMPATIBILITY_REPORT.md`](BASELINE_COMPATIBILITY_REPORT.md).
 
 ## Evaluation, latency, and trace
 
 Validated 50K outputs support FID, sFID, Inception Score, precision, and recall with one fixed local ADM evaluator/reference NPZ. Strict paired output supports PSNR, SSIM, and local AlexNet LPIPS from saved RGB uint8 PNG only after run metadata proves identical conditions. Tools never download missing reference/evaluator/weights and never substitute another LPIPS backbone.
 
-Synchronized CUDA-event timing starts after resident inputs/reset and ends after the clamped image tensor but before CPU/PNG. It includes embeddings, gates, exact/draft/history/verifier/reduction/`.item()`/scheduler, combined CFG, Heun, fresh head/unpatchify, cache I/O, and reset. Report batch-1 latency, common-batch throughput, and four-GPU wall clock separately. `speedup = median_matched_full / median_speca`; old 50K wall time is not a denominator.
+Synchronized CUDA-event timing starts after resident inputs/reset and ends after the clamped image tensor but before CPU/PNG. It includes embeddings, gates, exact/draft/history/verifier/reduction/`.item()`/scheduler, combined CFG, Heun, fresh head/unpatchify, cache I/O, and reset. Report batch-4 per-image latency, throughput, and four-GPU wall clock. `speedup = median_matched_full / median_speca`; old 50K wall time is not a denominator.
 
 Real timing reports `verification_block_time_ms`, `metric_reduction_time_ms`/`error_reduction_time_ms`, and `scalar_sync_time_ms`. The registered total-sampling definition is `verification_overhead_ratio = (verification_block_time + error_reduction_time + scalar_sync_time) / total_sampling_time`; the trace aggregator's subcomponent-only ratio is diagnostic and does not replace the CUDA-event denominator.
 
@@ -95,7 +95,7 @@ Summary trace records Full/Taylor/verification ratios/reasons, speculative spans
 
 ## Staged workflow
 
-Follow [`RUNBOOK.md`](RUNBOOK.md) in order: read-only audit; immutable batch-1 manifests; analytic memory; deferred 2–8 image smoke; upstream/instrumented Full parity; fixed-schedule draft parity; verification semantics; 1K proxy; independent 8K selection; matched single-GPU benchmark; frozen four-GPU 50K; output validation; distribution metrics; strict paired metrics only against a new matched Full; trace/latency/memory aggregation.
+Follow [`RUNBOOK.md`](RUNBOOK.md) in order: read-only audit; immutable batch-4 manifests; analytic memory; deferred smoke; upstream/instrumented Full parity; fixed-schedule draft parity; verification semantics; 1K proxy; independent 8K selection; matched single-GPU benchmark; frozen four-GPU 50K; output validation; distribution metrics; strict paired metrics only against a new matched Full; trace/latency/memory aggregation.
 
 [`configs/official_single_example_defaults.yaml`](configs/official_single_example_defaults.yaml) and [`configs/official_ddp_defaults.yaml`](configs/official_ddp_defaults.yaml) are read-only released starting points, not PixelGen optima. Tune order, base/decay threshold, and min/max spans on 1K/8K, select operating points by measured latency/speedup, freeze the selected config/hash, and never tune on final 50K.
 

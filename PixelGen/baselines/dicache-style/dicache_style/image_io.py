@@ -252,23 +252,36 @@ def _validate_trajectory_metadata(
     if total_calls % total_nfe:
         raise ValueError("total_stream_calls is not an integer multiple of total_nfe")
 
-    real_batch_size = _finite_trajectory_number(row, "real_batch_size", integer=True)
-    if real_batch_size != len(expected_group_ids):
-        raise ValueError("real_batch_size differs from trajectory sample IDs")
-    effective_batch_size = _finite_trajectory_number(
+    protocol_batch_size = _finite_trajectory_number(
+        row, "real_batch_size", integer=True
+    )
+    if protocol_batch_size <= 0:
+        raise ValueError("real_batch_size must be positive")
+    protocol_effective_batch_size = _finite_trajectory_number(
         row, "effective_cfg_batch_size", integer=True
     )
-    if effective_batch_size != 2 * real_batch_size:
+    if protocol_effective_batch_size != 2 * protocol_batch_size:
         raise ValueError("effective_cfg_batch_size must equal 2 * real_batch_size")
-    if "trajectory_real_batch_size" in row and _finite_trajectory_number(
-        row, "trajectory_real_batch_size", integer=True
-    ) != real_batch_size:
-        raise ValueError("trajectory_real_batch_size differs from run metadata")
-    if "trajectory_effective_cfg_batch_size" in row and _finite_trajectory_number(
-        row, "trajectory_effective_cfg_batch_size", integer=True
-    ) != effective_batch_size:
+    trajectory_batch_size = (
+        _finite_trajectory_number(row, "trajectory_real_batch_size", integer=True)
+        if "trajectory_real_batch_size" in row
+        else protocol_batch_size
+    )
+    if trajectory_batch_size != len(expected_group_ids):
+        raise ValueError("trajectory_real_batch_size differs from trajectory sample IDs")
+    if trajectory_batch_size > protocol_batch_size:
+        raise ValueError("trajectory_real_batch_size exceeds protocol real_batch_size")
+    trajectory_effective_batch_size = (
+        _finite_trajectory_number(
+            row, "trajectory_effective_cfg_batch_size", integer=True
+        )
+        if "trajectory_effective_cfg_batch_size" in row
+        else protocol_effective_batch_size
+    )
+    if trajectory_effective_batch_size != 2 * trajectory_batch_size:
         raise ValueError(
-            "trajectory_effective_cfg_batch_size differs from run metadata"
+            "trajectory_effective_cfg_batch_size must equal 2 * "
+            "trajectory_real_batch_size"
         )
     for key, value in row.items():
         if key.startswith("trajectory_"):
@@ -463,9 +476,13 @@ def resumable_batch_groups(
     checkpoint_path: str,
     checkpoint_size: int,
     method: str,
+    protocol_batch_size: int,
     resolution: int = 256,
 ) -> tuple[list[list[ManifestRecord]], list[str]]:
     """Skip only complete fixed groups; partial groups fail to preserve gating."""
+
+    if isinstance(protocol_batch_size, bool) or protocol_batch_size <= 0:
+        raise ValueError("protocol_batch_size must be a positive integer")
 
     groups: dict[str, list[ManifestRecord]] = defaultdict(list)
     for record in manifest:
@@ -488,7 +505,7 @@ def resumable_batch_groups(
             row = metadata.get(value.sample_id)
             if row is None:
                 raise RuntimeError(f"missing resume metadata for sample {value.sample_id}")
-            checks = {
+            checks: dict[str, object] = {
                 "class_id": value.class_id,
                 "seed": value.seed,
                 "batch_group_id": value.batch_group_id,
@@ -500,9 +517,22 @@ def resumable_batch_groups(
                 "checkpoint_path": checkpoint_path,
                 "checkpoint_size": checkpoint_size,
                 "method": method,
-                "real_batch_size": len(values),
-                "effective_cfg_batch_size": 2 * len(values),
+                "real_batch_size": protocol_batch_size,
+                "effective_cfg_batch_size": 2 * protocol_batch_size,
             }
+            trajectory_real = row.get("trajectory_real_batch_size")
+            trajectory_effective = row.get("trajectory_effective_cfg_batch_size")
+            if len(values) != protocol_batch_size and (
+                trajectory_real is None or trajectory_effective is None
+            ):
+                raise RuntimeError(
+                    f"resume metadata mismatch for sample {value.sample_id}: "
+                    "partial trajectory batch fields are required"
+                )
+            if trajectory_real is not None:
+                checks["trajectory_real_batch_size"] = len(values)
+            if trajectory_effective is not None:
+                checks["trajectory_effective_cfg_batch_size"] = 2 * len(values)
             if dicache_config is not None:
                 missing = [field for field in DICACHE_CONFIG_FIELDS if field not in dicache_config]
                 if missing:

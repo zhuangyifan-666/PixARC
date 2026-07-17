@@ -1,0 +1,1 @@
+This 1K run is coarse screening only. The frozen grid is t0p01=0.01 t0p02=0.02 t0p04=0.04 t0p08=0.08 t0p16=0.16 t0p32=0.32 t0p64=0.64; gamma_nonfinite_policy=official_propagate; final operating-point selection is deferred to a new disjoint 8K validation and 50K is evaluation-only.

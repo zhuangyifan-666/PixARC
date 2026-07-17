@@ -39,7 +39,6 @@ dicache:
   cache_dtype: inherit
   trace_mode: summary
 runtime:
-  batch_size: 1
-  protocol: sample_adaptive
+  batch_size: 32
+  protocol: grouped_batch
   compile_mode: matched_eager
-

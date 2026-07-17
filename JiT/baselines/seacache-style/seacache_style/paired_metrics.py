@@ -34,6 +34,7 @@ from .metadata import (
     PAIRING_FIELDS,
     atomic_write_json,
     load_json,
+    validate_archived_model_configs,
     validate_full_seacache_roles,
     validate_paired_runs,
     validate_run_artifacts,
@@ -212,7 +213,6 @@ def evaluate_paired(
         candidate_manifest
     ):
         raise ValueError("candidate run metadata does not bind manifest record content")
-    validate_paired_runs(reference_run, candidate_run)
     validate_full_seacache_roles(reference_run, candidate_run)
     sample_ids = validate_pair_manifests(reference_manifest, candidate_manifest)
     reference_root = validate_run_artifacts(
@@ -228,6 +228,12 @@ def evaluate_paired(
         supplied_manifest_path=candidate_manifest_path,
         run_metadata=candidate_run,
         manifest_records_sha256=manifest_records_sha256(candidate_manifest),
+    )
+    validate_archived_model_configs(reference_root, candidate_root)
+    validate_paired_runs(
+        reference_run,
+        candidate_run,
+        archived_model_configs_match=True,
     )
     reference_world_size = reference_run.get("world_size")
     candidate_world_size = candidate_run.get("world_size")

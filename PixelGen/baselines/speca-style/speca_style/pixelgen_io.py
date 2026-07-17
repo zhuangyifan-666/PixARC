@@ -97,6 +97,7 @@ class ManifestNoiseDataset(Dataset):
             interval=method_config["interval"],
             max_order=method_config["max_order"],
             coordinate_mode=str(method_config["coordinate_mode"]),
+            protocol_batch_size=batch_size,
             resolution=resolution,
         )
         self.records = [record for group in pending for record in group]

@@ -21,8 +21,8 @@ speca:
   trace_mode: shadow
   interval: null
 runtime:
-  batch_size: 1
-  effective_cfg_batch_size: 2
+  batch_size: 4
+  effective_cfg_batch_size: 8
   precision: bf16-mixed
   compile_mode: matched_eager
   num_workers: 1
@@ -105,7 +105,7 @@ data:
   train_dataset: null
   eval_dataset: null
   pred_dataset: null
-  train_batch_size: 1
+  train_batch_size: 4
   train_num_workers: 1
-  pred_batch_size: 1
+  pred_batch_size: 4
   pred_num_workers: 1

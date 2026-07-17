@@ -1,0 +1,13 @@
+{
+  "base_seed": 202607140000,
+  "batch_size": 4,
+  "class_assignment": "class_id=sample_id//samples_per_class",
+  "generator_algorithm": "per_sample_torch_generator_manual_seed",
+  "manifest_records_sha256": "f0c549310126692b52473cf66bab24caede2232b51c794c02a70ca9a20e817d9",
+  "manifest_sha256": "31536470eacf69e07ccd72305e7866957d15859b2091eec7daed2a309cedf5c0",
+  "manifest_version": "pixarc-imagenet-c2i-v1",
+  "pytorch_version": "2.7.1+cu126",
+  "record_count": 1000,
+  "shard_rule": "shard_id=sample_id%world_size",
+  "world_size": 4
+}

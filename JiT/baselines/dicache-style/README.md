@@ -49,7 +49,7 @@ Execution actions are `DIRECT_FULL`, `FULL_RESUME_FROM_PROBE`, and `REUSE`. `pro
 
 JiT performs conditional then unconditional as separate calls. They have independent observations, accumulators, anchors, actions, and refresh histories. For 50-step exact Heun there are 99 NFEs per stream and 198 network forwards. Repeated continuous times remain distinct solver-stage observations.
 
-This intentionally differs from sibling PixelGen, which keeps one combined `[unconditional, conditional]` effective-2B forward, one state, and one action. For JiT real batch `B>1`, each branch decision is batch-global over B samples; it is a `grouped_batch` experiment rather than the main sample-adaptive B=1 protocol.
+This intentionally differs from sibling PixelGen, which keeps one combined `[unconditional, conditional]` effective-2B forward, one state, and one action. JiT uses the registered batch-32 grouped protocol: each branch decision is batch-global over all 32 samples.
 
 ## Modes
 
@@ -66,7 +66,7 @@ Compile modes are explicit: `upstream` only for upstream Full, `matched_eager` f
 
 ## Reproducibility and fairness
 
-The main protocol is real batch 1/effective CFG work 2. Each manifest sample uses an independent CPU float32 generator and is copied to the assigned GPU, making noise invariant to sharding/resume order. Runs archive config, manifest, sidecar, and (for final runs) the exact release gate; bind checkpoint path/size/SHA-256, Git/tree IDs, port/upstream source-byte hashes, sampler, CFG, dtype, batch/grouping, compile mode, and DiCache profile; write numeric RGB uint8 PNGs atomically; and reject partial or mismatched resume groups.
+The main protocol is real batch 32/effective CFG work 64 through two branch forwards. The gate and gamma reduction are batch-global within each branch, so threshold selection and every matched Full/DiCache comparison use the same frozen groups. Each manifest sample uses an independent CPU float32 generator and is copied to the assigned GPU, making noise invariant to sharding/resume order. Runs archive config, manifest, sidecar, and (for final runs) the exact release gate; bind checkpoint path/size/SHA-256, Git/tree IDs, port/upstream source-byte hashes, sampler, CFG, dtype, batch/grouping, compile mode, and DiCache profile; write numeric RGB uint8 PNGs atomically; and reject partial or mismatched resume groups.
 
 Paired PSNR/SSIM/LPIPS requires mechanically identical manifests, per-sample noise, batch grouping, checkpoint/EMA, sampler, CFG, dtype, compile mode, and postprocessing. Existing or future Full outputs without that evidence may support validated unpaired distribution metrics only.
 

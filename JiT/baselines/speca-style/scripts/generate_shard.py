@@ -50,7 +50,7 @@ BASELINE_ROOT = Path(__file__).resolve().parents[1]
 CACHE4DIFFUSION_COMMIT = "91a1949fcc88acab46547f0b5f295f5de2df2870"
 TAYLORSEER_COMMIT = "704ee98c74f7f04da443daa3c0aa2cc7803d86e3"
 
-# These are stored once per trajectory (once per row for the main batch-1
+# These are stored once per trajectory (once per row for the main batch-32
 # protocol).  They are deliberately scalar: 50K runs never persist features.
 _SUMMARY_INT_FIELDS = (
     "total_nfe",
@@ -228,6 +228,8 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[dict[str, Any], dict[st
     batch_size = runtime.get("batch_size")
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("runtime.batch_size must be a positive integer")
+    if batch_size != 32:
+        raise ValueError("primary JiT SpeCa runs require runtime.batch_size=32")
     compile_mode = str(runtime.get("compile_mode", "matched_eager"))
     if compile_mode not in {"upstream", "matched_eager", "blockwise"}:
         raise ValueError("unsupported runtime.compile_mode")
@@ -407,6 +409,7 @@ def main() -> None:
         interval=speca["interval"],
         max_order=int(speca["max_order"]),
         coordinate_mode=str(speca["coordinate_mode"]),
+        protocol_batch_size=batch_size,
         resolution=image_size,
     )
 
@@ -598,10 +601,12 @@ def main() -> None:
                 {
                     "trajectory_id": group_summary["trajectory_id"],
                     "trajectory_sample_ids": group_summary["sample_ids"],
-                    "real_batch_size": group_summary["real_batch_size"],
-                    "effective_cfg_batch_size": group_summary[
+                    "trajectory_real_batch_size": group_summary["real_batch_size"],
+                    "trajectory_effective_cfg_batch_size": group_summary[
                         "effective_cfg_batch_size"
                     ],
+                    "real_batch_size": batch_size,
+                    "effective_cfg_batch_size": 2 * batch_size,
                     "trajectory_mode": group_summary["mode"],
                 }
             )
