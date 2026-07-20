@@ -10,10 +10,12 @@ from torch import nn
 from pixel_remainder_taylor.config import validate_method_config
 from pixel_remainder_taylor.controller import plan_segment, split_bands
 from pixel_remainder_taylor.finite_difference import (
+    UnsafeInterpolationError,
     nonuniform_lagrange_weights,
     nonuniform_polynomial_forecast,
     taylor_forecast,
 )
+from pixel_remainder_taylor.jit_denoiser import PixelRemainderTaylorDenoiser
 from pixel_remainder_taylor.runtime import PixelRemainderRuntime
 from pixel_remainder_taylor.scheduler import (
     FULL,
@@ -232,22 +234,65 @@ def test_diagnostic_return_replaces_taylor_before_stream_execution():
         continuous_t=0.5,
         t_next=0.5,
     )
-    assert decision.action == TAYLOR
-    replacement = runtime.force_current_full("diagnostic_return")
-    assert replacement.action == FULL
-    assert replacement.full_reason == "diagnostic_return"
+    assert decision.action == FULL
+    assert decision.full_reason == "unsafe_forecast_preflight:RuntimeError"
     assert runtime.scheduler.full_count == 4
     assert runtime.scheduler.taylor_count == 0
     runtime.reset()
 
 
 def test_no_extra_forward_contract_jit():
-    calls = 0
-    for _nfe in range(99):
-        calls += 2  # conditional and unconditional B-sized calls
-    assert calls == expected_network_forward_count(
+    class CountingNet(nn.Module):
+        def __init__(self, runtime):
+            super().__init__()
+            object.__setattr__(self, "runtime", runtime)
+            self.calls = 0
+
+        def forward_taylor(self, z, t, labels, *, stream_id):
+            self.calls += 1
+            shaped_t = t.reshape(-1, 1, 1, 1).to(z)
+            result = self.runtime.branch(
+                stream_id=stream_id,
+                layer_idx=0,
+                module_name="dummy",
+                exact_fn=lambda: z + (1.0 - shaped_t),
+            )
+            self.runtime.mark_stream_complete(stream_id)
+            return result
+
+    model = object.__new__(PixelRemainderTaylorDenoiser)
+    nn.Module.__init__(model)
+    runtime = PixelRemainderRuntime(
+        mode="instrumented_full", tau=0.0, max_taylor_span=3
+    )
+    object.__setattr__(model, "pixel_remainder_runtime", runtime)
+    model.net = CountingNet(runtime)
+    model.img_size = 8
+    model.num_classes = 10
+    model.noise_scale = 1.0
+    model.t_eps = 1.0e-6
+    model.method = "heun"
+    model.steps = 50
+    model.cfg_scale = 3.0
+    model.cfg_interval = (0.1, 1.0)
+    object.__setattr__(model, "_network_forward_count", 0)
+    object.__setattr__(model, "_trajectory_serial", 0)
+    object.__setattr__(model, "_last_pixel_remainder_summary", None)
+    labels = torch.tensor([1, 2])
+    output = model.generate(labels, noise=torch.zeros(2, 3, 8, 8), sample_ids=[7, 8])
+    assert output.shape == (2, 3, 8, 8)
+    assert model.net.calls == expected_network_forward_count(
         model_family="jit", sampler="heun", num_steps=50
     ) == 198
+    summary = model._last_pixel_remainder_summary
+    assert summary["total_nfe"] == 99
+    assert summary["network_forward_count"] == 198
+    assert summary["stage_statistics"] == {
+        "corrector": {"full_nfe": 49, "taylor_nfe": 0},
+        "final_euler": {"full_nfe": 1, "taylor_nfe": 0},
+        "predictor": {"full_nfe": 49, "taylor_nfe": 0},
+    }
+    assert not runtime.active
 
 
 def test_no_extra_forward_contract_pixelgen():
@@ -361,6 +406,204 @@ def test_nonuniform_exact_anchor_quadratic_forecast():
         )
     assert state.forecast(93, order_override=2).item() == pytest.approx(49.0)
     assert state.forecast(93, order_override=1).item() == pytest.approx(45.0)
+
+
+@pytest.mark.parametrize("degree", [0, 1, 2, 3])
+def test_nonuniform_decreasing_grid_exact_polynomials(degree: int):
+    coordinates = [10, 7, 3, -2]
+    values = [torch.tensor([float(q**degree)]) for q in coordinates]
+    forecast = nonuniform_polynomial_forecast(
+        coordinates,
+        values,
+        coordinate=-4,
+        order_override=degree,
+    )
+    assert forecast.item() == pytest.approx(float((-4) ** degree), abs=1e-4)
+
+
+def test_required_nonuniform_quadratic_counterexample():
+    coordinates = [10, 7, 3]
+    values = [torch.tensor([float(q * q)]) for q in coordinates]
+    result = nonuniform_polynomial_forecast(
+        coordinates, values, coordinate=2, order_override=2
+    )
+    assert result.item() == pytest.approx(4.0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_low_precision_forecast_returns_storage_dtype_after_fp32_sum(dtype):
+    coordinates = [10, 7, 3]
+    values = [torch.tensor([float(q * q)], dtype=dtype) for q in coordinates]
+    weights = nonuniform_lagrange_weights(coordinates, 2)
+    expected = sum(
+        value.float() * weight
+        for value, weight in zip(values, weights, strict=True)
+    ).to(dtype)
+    result = nonuniform_polynomial_forecast(
+        coordinates, values, coordinate=2, order_override=2
+    )
+    assert result.dtype == dtype
+    assert torch.equal(result, expected)
+
+
+def test_invalid_and_ill_conditioned_interpolation_fail_closed():
+    with pytest.raises(ValueError, match="distinct"):
+        nonuniform_lagrange_weights([3, 3], 2)
+    with pytest.raises(ValueError, match="finite"):
+        nonuniform_lagrange_weights([3, float("nan")], 2)
+    with pytest.raises(UnsafeInterpolationError):
+        nonuniform_lagrange_weights([0.0, 1.0e-12, 1.0], 10.0)
+
+
+def test_runtime_backend_is_mode_specific():
+    dynamic = PixelRemainderRuntime(
+        mode="pixel_remainder_taylor", tau=0.01, max_taylor_span=3
+    )
+    fixed = PixelRemainderRuntime(
+        mode="fixed_schedule_parity",
+        tau=0.0,
+        max_taylor_span=3,
+        debug_fixed_interval=3,
+        debug_fixed_order=2,
+    )
+    assert dynamic.predictor_backend == "nonuniform_polynomial"
+    assert fixed.predictor_backend == "legacy_recursive"
+
+
+def _run_trace_mode(trace_mode: str):
+    runtime = PixelRemainderRuntime(
+        mode="pixel_remainder_taylor",
+        tau=1.0,
+        max_taylor_span=3,
+        trace_mode=trace_mode,
+    )
+    runtime.begin_trajectory(
+        total_nfe=9,
+        expected_streams={"combined_cfg"},
+        trajectory_id="trace-equivalence",
+        sample_ids=[11, 12],
+    )
+    actions = []
+    outputs = []
+    for index in range(9):
+        decision = runtime.begin_nfe(
+            macro_step_index=index // 2,
+            solver_stage="predictor" if index % 2 == 0 else "corrector",
+            continuous_t=index / 9,
+            t_next=(index + 1) / 9,
+        )
+        actions.append(decision.action)
+        value = runtime.branch(
+            stream_id="combined_cfg",
+            layer_idx=0,
+            module_name="gate",
+            exact_fn=lambda q=decision.q: torch.full((2, 4), float(q * q)),
+        )
+        outputs.append(value.clone())
+        runtime.mark_stream_complete("combined_cfg")
+        state = _factor(2.0 + decision.q * 0.01)
+        runtime.end_nfe(
+            current_state=state,
+            t=0.5,
+            guided_velocity=torch.zeros_like(state),
+        )
+    return actions, outputs, runtime.end_trajectory()
+
+
+def test_full_and_summary_trace_do_not_change_actions_outputs_or_counts():
+    full_actions, full_outputs, full = _run_trace_mode("full")
+    summary_actions, summary_outputs, summary = _run_trace_mode("summary")
+    assert full_actions == summary_actions
+    assert all(
+        torch.equal(left, right)
+        for left, right in zip(full_outputs, summary_outputs, strict=True)
+    )
+    for key in (
+        "total_nfe", "full_nfe", "taylor_nfe", "order1_taylor_nfe",
+        "order2_taylor_nfe", "span_histogram", "stage_statistics",
+    ):
+        assert full[key] == summary[key]
+    assert len(full["nfe_trace"]) == 9
+    assert "nfe_trace" not in summary
+
+
+def test_vectorized_dynamic_risk_matches_direct_reference():
+    coordinates = [10, 7, 3, 0]
+    grid = torch.arange(16, dtype=torch.float32).reshape(1, 1, 16, 1)
+    anchors = [
+        (1.0 + q * 0.01 + grid * (q + 1) * 1.0e-4).repeat(2, 3, 1, 16)
+        for q in coordinates
+    ]
+    plan = plan_segment(
+        anchors,
+        pixel_coordinates=coordinates,
+        feature_available_order_min=2,
+        nfe_index=40,
+        total_nfe=99,
+        tau=10.0,
+        max_taylor_span=3,
+    )
+    progress = 40 / 98
+    base_low, base_high = (
+        component.abs().mean(dim=(1, 2, 3))
+        for component in split_bands(anchors[-1])
+    )
+    for order in (1, 2):
+        for horizon in range(1, 4):
+            protected = nonuniform_polynomial_forecast(
+                coordinates,
+                anchors,
+                coordinate=-horizon,
+                order_override=order + 1,
+            )
+            selected = nonuniform_polynomial_forecast(
+                coordinates,
+                anchors,
+                coordinate=-horizon,
+                order_override=order,
+            )
+            omitted_low, omitted_high = (
+                component.abs().mean(dim=(1, 2, 3))
+                for component in split_bands(protected - selected)
+            )
+            direct = torch.maximum(
+                omitted_low / (base_low + 1.0e-6),
+                progress * omitted_high / (base_high + 1.0e-6),
+            )
+            assert plan.risk[order][horizon] == pytest.approx(float(direct.mean()))
+            assert plan.risk_max[order][horizon] == pytest.approx(float(direct.max()))
+
+
+def test_exception_during_jit_sampling_clears_runtime_state():
+    class FailingNet(nn.Module):
+        def forward_taylor(self, *args, **kwargs):
+            raise RuntimeError("synthetic failure")
+
+    model = object.__new__(PixelRemainderTaylorDenoiser)
+    nn.Module.__init__(model)
+    runtime = PixelRemainderRuntime(
+        mode="instrumented_full", tau=0.0, max_taylor_span=3
+    )
+    object.__setattr__(model, "pixel_remainder_runtime", runtime)
+    model.net = FailingNet()
+    model.img_size = 8
+    model.num_classes = 10
+    model.noise_scale = 1.0
+    model.t_eps = 1.0e-6
+    model.method = "heun"
+    model.steps = 50
+    model.cfg_scale = 3.0
+    model.cfg_interval = (0.1, 1.0)
+    object.__setattr__(model, "_network_forward_count", 0)
+    object.__setattr__(model, "_trajectory_serial", 0)
+    object.__setattr__(model, "_last_pixel_remainder_summary", None)
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        model.generate(
+            torch.tensor([1]), noise=torch.zeros(1, 3, 8, 8), sample_ids=[1]
+        )
+    assert not runtime.active
+    assert runtime.pixel_history.available_order == -1
+    assert runtime.streams == {}
 
 
 def test_bf16_large_coordinate_extrapolation_accumulates_in_fp32():

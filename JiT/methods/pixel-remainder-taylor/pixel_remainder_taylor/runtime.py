@@ -6,6 +6,7 @@ import copy
 import math
 import os
 import time
+from collections import Counter, defaultdict
 from dataclasses import asdict, replace
 from statistics import mean
 from typing import Callable, Hashable, Iterable
@@ -60,8 +61,8 @@ class PixelRemainderRuntime:
             raise ValueError("max_taylor_span must be an integer >= 1")
         if cache_dtype not in {"inherit", "fp32"}:
             raise ValueError("cache_dtype must be inherit or fp32")
-        if trace_mode != "full":
-            raise ValueError("Pixel-Remainder primary runtime requires full trace")
+        if trace_mode not in {"full", "summary"}:
+            raise ValueError("trace_mode must be full or summary")
         self.mode = mode
         self.tau = None if tau is None else float(tau)
         self.max_taylor_span = int(max_taylor_span)
@@ -90,6 +91,10 @@ class PixelRemainderRuntime:
         self.sample_ids: list[int] = []
         self.nfe_trace: list[dict[str, object]] = []
         self.plan_history: list[SegmentPlan] = []
+        self.stage_statistics: dict[str, Counter[str]] = defaultdict(Counter)
+        self.risk_sums: Counter[str] = Counter()
+        self.risk_maxima: dict[str, float] = {}
+        self.risk_counts: Counter[str] = Counter()
         self.history_update_time_ms = 0.0
         self.forecast_time_ms = 0.0
         self.controller_time_ms = 0.0
@@ -165,7 +170,26 @@ class PixelRemainderRuntime:
             raise RuntimeError("Taylor decision has no valid active order")
         self.current_decision = decision
         self.seen_streams.clear()
+        if decision.action == TAYLOR:
+            try:
+                self._preflight_taylor(decision)
+            except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                decision = self.force_current_full(
+                    f"unsafe_forecast_preflight:{type(error).__name__}"
+                )
         return decision
+
+    def _preflight_taylor(self, decision: DynamicDecision) -> None:
+        """Fail closed before the first network branch consumes a forecast."""
+
+        order = int(decision.active_forecast_order)
+        if set(self.streams) != self.expected_streams:
+            raise RuntimeError("feature stream set changed")
+        for stream in self.streams.values():
+            if not stream.module_states:
+                raise RuntimeError("feature stream has no exact history")
+            for state in stream.module_states.values():
+                state.preflight_forecast(decision.q, order_override=order)
 
     def validate_context(self, stream_id: Hashable) -> TaylorStreamState:
         if not self.active or self.current_decision is None:
@@ -344,7 +368,17 @@ class PixelRemainderRuntime:
         if plan is not None:
             record.update(plan.trace_fields())
             record["anchor_q"] = decision.q
-        self.nfe_trace.append(record)
+            for order, table in plan.risk.items():
+                for horizon, value in table.items():
+                    key = f"risk_o{order}_h{horizon}"
+                    self.risk_sums[key] += float(value)
+                    self.risk_counts[key] += 1
+                    self.risk_maxima[key] = max(
+                        self.risk_maxima.get(key, float("-inf")), float(value)
+                    )
+        self.stage_statistics[str(decision.solver_stage)][decision.action] += 1
+        if self.trace_mode == "full":
+            self.nfe_trace.append(record)
         self.current_decision = None
         self.seen_streams.clear()
 
@@ -372,12 +406,23 @@ class PixelRemainderRuntime:
             )
             for span in range(self.max_taylor_span + 1)
         }
-        return {
+        span_histogram = {
+            str(span): spans.count(span)
+            for span in range(self.max_taylor_span + 1)
+        }
+        risk_summary: dict[str, float | int] = {}
+        for key in sorted(self.risk_counts):
+            count = self.risk_counts[key]
+            risk_summary[f"{key}_count"] = count
+            risk_summary[f"{key}_mean"] = self.risk_sums[key] / count
+            risk_summary[f"{key}_max"] = self.risk_maxima[key]
+        result = {
             "trajectory_id": self.trajectory_id,
             "sample_ids": list(self.sample_ids),
             "mode": self.mode,
             "tau": self.tau,
             "max_taylor_span": self.max_taylor_span,
+            "trace_mode": self.trace_mode,
             "total_nfe": total,
             "full_nfe": self.scheduler.full_count,
             "taylor_nfe": self.scheduler.taylor_count,
@@ -386,12 +431,23 @@ class PixelRemainderRuntime:
             "order1_taylor_nfe": self.order1_taylor_nfe,
             "order2_taylor_nfe": self.order2_taylor_nfe,
             "mean_selected_order": mean(selected_orders) if selected_orders else 0.0,
+            "selected_order_count": len(selected_orders),
+            "plan_count": len(spans),
             "mean_planned_span": mean(spans) if spans else 0.0,
             "max_planned_span": max(spans, default=0),
             **span_ratios,
             "span_cap_hit_ratio": (
                 spans.count(self.max_taylor_span) / len(spans) if spans else 0.0
             ),
+            "span_histogram": span_histogram,
+            "stage_statistics": {
+                stage: {
+                    "full_nfe": counts[FULL],
+                    "taylor_nfe": counts[TAYLOR],
+                }
+                for stage, counts in sorted(self.stage_statistics.items())
+            },
+            "risk_summary": risk_summary,
             "controller_time_ms": self.controller_time_ms,
             "pixel_history_update_time_ms": self.pixel_history_update_time_ms,
             "forecast_time_ms": self.forecast_time_ms,
@@ -409,8 +465,10 @@ class PixelRemainderRuntime:
                 "cpu_wall_dispatch_including_explicit_scalar_synchronization; "
                 "official speed uses cumulative launcher wall clock"
             ),
-            "nfe_trace": copy.deepcopy(self.nfe_trace),
         }
+        if self.trace_mode == "full":
+            result["nfe_trace"] = copy.deepcopy(self.nfe_trace)
+        return result
 
     def end_trajectory(
         self, *, require_complete: bool = True, reset: bool = True
@@ -444,6 +502,10 @@ class PixelRemainderRuntime:
         self.sample_ids = []
         self.nfe_trace.clear()
         self.plan_history.clear()
+        self.stage_statistics.clear()
+        self.risk_sums.clear()
+        self.risk_maxima.clear()
+        self.risk_counts.clear()
         self.history_update_time_ms = 0.0
         self.forecast_time_ms = 0.0
         self.controller_time_ms = 0.0

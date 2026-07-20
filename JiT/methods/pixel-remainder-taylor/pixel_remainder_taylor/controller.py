@@ -116,15 +116,20 @@ def plan_segment(
     progress = min(1.0, max(0.0, float(progress)))
     if pixel_coordinates is not None and len(pixel_coordinates) != len(pixel_factors):
         raise ValueError("pixel coordinates/values length mismatch")
-    low_norms: list[float] = []
-    high_norms: list[float] = []
-    nonfinite = False
-    diagnostic_terms = list(pixel_factors)
-    if pixel_coordinates is not None and pixel_factors:
-        diagnostic_terms = [pixel_factors[-1]]
-        diagnostic_target = float(pixel_coordinates[-1]) - 1.0
-        for order in range(1, len(pixel_factors)):
-            try:
+    risks: dict[int, dict[int, float]] = {}
+    maxima: dict[int, dict[int, float]] = {}
+    safe_h: dict[int, int] = {1: 0, 2: 0}
+    if not pixel_factors:
+        return SegmentPlan(None, 0, safe_h, risks, maxima, progress, [], [], True)
+
+    # Construct every forecast and band risk on device.  The controller makes
+    # one compact transfer per Full anchor for discrete decisions and tracing.
+    try:
+        diagnostic_terms = list(pixel_factors)
+        if pixel_coordinates is not None:
+            diagnostic_terms = [pixel_factors[-1]]
+            diagnostic_target = float(pixel_coordinates[-1]) - 1.0
+            for order in range(1, len(pixel_factors)):
                 current = nonuniform_polynomial_forecast(
                     pixel_coordinates,
                     pixel_factors,
@@ -137,44 +142,24 @@ def plan_segment(
                     coordinate=diagnostic_target,
                     order_override=order - 1,
                 )
-            except (ValueError, UnsafeInterpolationError):
-                nonfinite = True
-                break
-            diagnostic_terms.append(current - previous)
-    for factor in diagnostic_terms:
-        low, high = _band_norms(factor.float(), pool_kernel)
-        low_mean = float(low.mean())
-        high_mean = float(high.mean())
-        low_norms.append(low_mean)
-        high_norms.append(high_mean)
-        if not bool(torch.isfinite(low).all() and torch.isfinite(high).all()):
-            nonfinite = True
+                diagnostic_terms.append(current - previous)
 
-    risks: dict[int, dict[int, float]] = {}
-    maxima: dict[int, dict[int, float]] = {}
-    safe_h: dict[int, int] = {1: 0, 2: 0}
-    if not pixel_factors or nonfinite:
-        return SegmentPlan(None, 0, safe_h, risks, maxima, progress, low_norms, high_norms, True)
-
-    base_value = pixel_factors[-1] if pixel_coordinates is not None else pixel_factors[0]
-    base_low, base_high = _band_norms(base_value.float(), pool_kernel)
-    for order in ORDER_CANDIDATES:
-        if len(pixel_factors) <= order + 1:
-            continue
-        if feature_available_order_min < order:
-            continue
-        order_risk: dict[int, float] = {}
-        order_max: dict[int, float] = {}
-        for horizon in range(1, horizon_limit + 1):
-            if pixel_coordinates is None:
-                omitted = pixel_factors[order + 1].float()
-                scale = abs(horizon) ** (order + 1) / math.factorial(order + 1)
-                omitted_low, omitted_high = _band_norms(omitted, pool_kernel)
-                relative_low = scale * omitted_low / (base_low + eps)
-                relative_high = scale * omitted_high / (base_high + eps)
-            else:
-                target = float(pixel_coordinates[-1]) - float(horizon)
-                try:
+        base_value = (
+            pixel_factors[-1] if pixel_coordinates is not None else pixel_factors[0]
+        )
+        base_low, base_high = _band_norms(base_value.float(), pool_kernel)
+        candidate_keys: list[tuple[int, int]] = []
+        candidate_terms: list[torch.Tensor] = []
+        candidate_scales: list[float] = []
+        for order in ORDER_CANDIDATES:
+            if len(pixel_factors) <= order + 1 or feature_available_order_min < order:
+                continue
+            for horizon in range(1, horizon_limit + 1):
+                if pixel_coordinates is None:
+                    omitted = pixel_factors[order + 1].float()
+                    scale = abs(horizon) ** (order + 1) / math.factorial(order + 1)
+                else:
+                    target = float(pixel_coordinates[-1]) - float(horizon)
                     protected = nonuniform_polynomial_forecast(
                         pixel_coordinates,
                         pixel_factors,
@@ -187,29 +172,64 @@ def plan_segment(
                         coordinate=target,
                         order_override=order,
                     )
-                except (ValueError, UnsafeInterpolationError):
-                    nonfinite = True
-                    continue
-                omitted_low, omitted_high = _band_norms(
-                    (protected - selected).float(), pool_kernel
-                )
-                relative_low = omitted_low / (base_low + eps)
-                relative_high = omitted_high / (base_high + eps)
+                    omitted = (protected - selected).float()
+                    scale = 1.0
+                candidate_keys.append((order, horizon))
+                candidate_terms.append(omitted)
+                candidate_scales.append(scale)
+
+        batch = int(base_value.shape[0])
+        diagnostic_low, diagnostic_high = _band_norms(
+            torch.cat([term.float() for term in diagnostic_terms], dim=0),
+            pool_kernel,
+        )
+        diagnostic_low = diagnostic_low.reshape(len(diagnostic_terms), batch).mean(1)
+        diagnostic_high = diagnostic_high.reshape(len(diagnostic_terms), batch).mean(1)
+        compact_parts = [diagnostic_low, diagnostic_high]
+        if candidate_terms:
+            omitted_low, omitted_high = _band_norms(
+                torch.cat(candidate_terms, dim=0), pool_kernel
+            )
+            omitted_low = omitted_low.reshape(len(candidate_terms), batch)
+            omitted_high = omitted_high.reshape(len(candidate_terms), batch)
+            scales = torch.tensor(
+                candidate_scales,
+                dtype=omitted_low.dtype,
+                device=omitted_low.device,
+            ).unsqueeze(1)
+            relative_low = scales * omitted_low / (base_low.unsqueeze(0) + eps)
+            relative_high = scales * omitted_high / (base_high.unsqueeze(0) + eps)
             per_image = torch.maximum(relative_low, progress * relative_high)
-            mean_value = float(per_image.mean())
-            max_value = float(per_image.max())
-            if not math.isfinite(mean_value) or not math.isfinite(max_value):
-                nonfinite = True
-                continue
-            order_risk[horizon] = mean_value
-            order_max[horizon] = max_value
-            if mean_value <= tau:
-                safe_h[order] = horizon
-        risks[order] = order_risk
-        maxima[order] = order_max
+            compact_parts.extend((per_image.mean(1), per_image.amax(1)))
+        compact_values = torch.cat(compact_parts).detach().cpu().tolist()
+    except (RuntimeError, TypeError, ValueError, UnsafeInterpolationError):
+        return SegmentPlan(None, 0, safe_h, risks, maxima, progress, [], [], True)
+
+    diagnostic_count = len(diagnostic_terms)
+    low_norms = [float(value) for value in compact_values[:diagnostic_count]]
+    high_norms = [
+        float(value)
+        for value in compact_values[diagnostic_count : 2 * diagnostic_count]
+    ]
+    candidate_count = len(candidate_keys)
+    risk_values = compact_values[
+        2 * diagnostic_count : 2 * diagnostic_count + candidate_count
+    ]
+    max_values = compact_values[2 * diagnostic_count + candidate_count :]
+    nonfinite = not all(math.isfinite(float(value)) for value in compact_values)
+    for (order, horizon), mean_value, max_value in zip(
+        candidate_keys, risk_values, max_values, strict=True
+    ):
+        risks.setdefault(order, {})[horizon] = float(mean_value)
+        maxima.setdefault(order, {})[horizon] = float(max_value)
+        if math.isfinite(mean_value) and math.isfinite(max_value) and mean_value <= tau:
+            safe_h[order] = horizon
 
     if nonfinite:
-        return SegmentPlan(None, 0, {1: 0, 2: 0}, risks, maxima, progress, low_norms, high_norms, True)
+        return SegmentPlan(
+            None, 0, {1: 0, 2: 0}, risks, maxima,
+            progress, low_norms, high_norms, True,
+        )
     selected_order = min(ORDER_CANDIDATES, key=lambda order: (-safe_h[order], order))
     selected_span = safe_h[selected_order]
     if selected_span == 0:

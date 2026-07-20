@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Hashable
 
@@ -54,6 +55,10 @@ class ModuleTaylorState:
         max_order: int,
         cache_dtype: str,
     ) -> None:
+        if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+            raise TypeError("exact-anchor coordinate must be numeric")
+        if not math.isfinite(float(coordinate)):
+            raise ValueError("exact-anchor coordinate must be finite")
         self._validate(value)
         cached = value.detach().clone()
         if cache_dtype == "fp32":
@@ -103,6 +108,25 @@ class ModuleTaylorState:
         if self.dtype is not None and result.dtype != self.dtype:
             result = result.to(dtype=self.dtype)
         return result
+
+    def preflight_forecast(
+        self, coordinate: int | float, *, order_override: int
+    ) -> None:
+        """Validate a Taylor read before a cached model branch executes."""
+
+        if self.available_order < order_override:
+            raise RuntimeError(
+                f"feature history order {self.available_order} is below "
+                f"requested order {order_override}"
+            )
+        if self.predictor_backend == "nonuniform_polynomial":
+            from .finite_difference import nonuniform_lagrange_weights
+
+            nonuniform_lagrange_weights(
+                self.anchor_coordinates[-(order_override + 1) :], coordinate
+            )
+        elif not math.isfinite(float(coordinate)):
+            raise ValueError("forecast coordinate must be finite")
 
     @property
     def available_order(self) -> int:
@@ -158,6 +182,10 @@ class PixelHistory:
     def update_exact(
         self, value: torch.Tensor, *, coordinate: int | float, max_order: int = 3
     ) -> None:
+        if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+            raise TypeError("exact-anchor coordinate must be numeric")
+        if not math.isfinite(float(coordinate)):
+            raise ValueError("exact-anchor coordinate must be finite")
         if value.ndim != 4 or value.shape[1] != 3:
             raise ValueError("x0 anchor must have shape [B,3,H,W]")
         shape = tuple(value.shape)

@@ -27,6 +27,9 @@ for item in (UPSTREAM_ROOT, METHOD_ROOT, BASELINE_ROOT):
         sys.path.insert(0, str(item))
 
 from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.finite_difference import (  # noqa: E402
+    MAX_INTERPOLATION_WEIGHT_L1,
+)
 from pixel_remainder_taylor.jit_denoiser import PixelRemainderTaylorDenoiser  # noqa: E402
 from pixel_remainder_taylor.protocol import (  # noqa: E402
     executable_tree_sha256,
@@ -274,6 +277,14 @@ def main() -> None:
         "identity_interval": identity_interval,
         "identity_max_order": identity_max_order,
         "coordinate_mode": coordinate_mode,
+        "predictor_backend": (
+            "legacy_recursive" if fixed_parity else "nonuniform_polynomial"
+        ),
+        "max_interpolation_weight_l1": MAX_INTERPOLATION_WEIGHT_L1,
+        "trace_mode": method.get("trace_mode", "full"),
+        "cuda_version": torch.version.cuda,
+        "real_batch_size": batch_size,
+        "cfg_execution": "two separate B-sized conditional/unconditional forwards",
     })
     run_manifest = output / "run_manifest.json"
     if not run_manifest.exists():
@@ -283,7 +294,11 @@ def main() -> None:
         "config", "input_config_hash", "manifest_sha256",
         "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
         "method", "tau", "max_taylor_span", "git_commit",
-        "pytorch_version", "method_source_sha256",
+        "pytorch_version", "python_version", "cuda_version",
+        "method_source_sha256", "predictor_backend",
+        "max_interpolation_weight_l1", "trace_mode",
+        "expected_nfe_per_trajectory", "expected_network_forwards_per_trajectory",
+        "real_batch_size", "cfg_execution",
     ):
         if existing_run.get(key) != manifest_value.get(key):
             raise RuntimeError(f"existing run_manifest mismatch: {key}")

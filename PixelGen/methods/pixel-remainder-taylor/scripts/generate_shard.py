@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -26,6 +27,9 @@ for item in (METHOD_ROOT, SHARED_ROOT, BASELINE_ROOT):
         sys.path.insert(0, str(item))
 
 from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.finite_difference import (  # noqa: E402
+    MAX_INTERPOLATION_WEIGHT_L1,
+)
 from pixel_remainder_taylor.protocol import (  # noqa: E402
     executable_tree_sha256,
     validate_compatible_manifest_sidecar,
@@ -87,6 +91,47 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 def _write_yaml(path: Path, value: object) -> None:
     content = yaml.safe_dump(value, sort_keys=False).encode("utf-8")
     _atomic_bytes(path, content)
+
+
+def build_resolved_cli_config(
+    config: dict[str, object],
+    *,
+    trainer_updates: dict[str, object],
+    denoiser_updates: dict[str, object],
+    dataset_init_args: dict[str, object],
+    pred_batch_size: int,
+    pred_num_workers: int,
+    compile_mode: str,
+) -> dict[str, object]:
+    """Build the exact LightningCLI prediction config used by a rank."""
+
+    resolved = copy.deepcopy({
+        key: value for key, value in config.items()
+        if key not in {"schema_version", "template_only", "checkpoint", "method", "runtime"}
+    })
+    resolved["trainer"] = dict(resolved.get("trainer", {}))
+    resolved["trainer"].update(trainer_updates)
+    model = dict(resolved["model"])
+    denoiser = dict(model["denoiser"])
+    denoiser_args = dict(denoiser["init_args"])
+    denoiser_args.update(denoiser_updates)
+    denoiser["init_args"] = denoiser_args
+    model["denoiser"] = denoiser
+    model["compile_mode"] = compile_mode
+    resolved["model"] = model
+    data = dict(resolved["data"])
+    data.update({
+        "train_dataset": None,
+        "eval_dataset": None,
+        "pred_batch_size": pred_batch_size,
+        "pred_num_workers": pred_num_workers,
+        "pred_dataset": {
+            "class_path": "pixel_remainder_taylor.pixelgen_io.ManifestNoiseDataset",
+            "init_args": copy.deepcopy(dataset_init_args),
+        },
+    })
+    resolved["data"] = data
+    return resolved
 
 
 def _trace_count(path: Path) -> int:
@@ -253,6 +298,14 @@ def main() -> None:
         "identity_interval": identity_interval,
         "identity_max_order": identity_max_order,
         "coordinate_mode": coordinate_mode,
+        "predictor_backend": (
+            "legacy_recursive" if fixed_parity else "nonuniform_polynomial"
+        ),
+        "max_interpolation_weight_l1": MAX_INTERPOLATION_WEIGHT_L1,
+        "trace_mode": method.get("trace_mode", "full"),
+        "cuda_version": torch.version.cuda,
+        "real_batch_size": batch_size,
+        "cfg_execution": "one combined [unconditional, conditional] 2B forward",
     })
     run_manifest = output / "run_manifest.json"
     if not run_manifest.exists():
@@ -262,7 +315,11 @@ def main() -> None:
         "config", "input_config_hash", "manifest_sha256",
         "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
         "method", "tau", "max_taylor_span", "git_commit",
-        "pytorch_version", "method_source_sha256",
+        "pytorch_version", "python_version", "cuda_version",
+        "method_source_sha256", "predictor_backend",
+        "max_interpolation_weight_l1", "trace_mode",
+        "expected_nfe_per_trajectory", "expected_network_forwards_per_trajectory",
+        "real_batch_size", "cfg_execution",
     ):
         if existing_run.get(key) != run_value.get(key):
             raise RuntimeError(f"existing run_manifest mismatch: {key}")
@@ -277,12 +334,9 @@ def main() -> None:
             atomic_write_json(summary_path, result)
         print(json.dumps(result, indent=2, sort_keys=True)); return
 
-    resolved = {
-        key: value for key, value in config.items()
-        if key not in {"schema_version", "template_only", "checkpoint", "method", "runtime"}
-    }
-    resolved["trainer"] = dict(resolved.get("trainer", {}))
-    resolved["trainer"].update({
+    resolved = build_resolved_cli_config(
+        config,
+        trainer_updates={
         "default_root_dir": str(output / "lightning" / f"rank_{args.shard_id}"),
         "accelerator": "gpu", "devices": 1, "strategy": "auto", "logger": False,
         "precision": runtime.get("precision", "bf16-mixed"), "use_distributed_sampler": False,
@@ -291,37 +345,29 @@ def main() -> None:
             "init_args": {"output_root": str(output), "shard_id": args.shard_id,
                           "resolution": resolution, "resume": args.resume},
         }],
-    })
-    denoiser_args.update({
+        },
+        denoiser_updates={
         "method_mode": method["mode"], "method_tau": method.get("tau"),
         "method_max_taylor_span": method["max_taylor_span"],
         "method_cache_dtype": method.get("cache_dtype", "inherit"),
         "method_trace_mode": method.get("trace_mode", "full"),
         "debug_fixed_interval": debug.get("interval"), "debug_fixed_order": debug.get("order"),
         "compile_mode": runtime.get("compile_mode", "matched_eager"),
-    })
-    denoiser["init_args"] = denoiser_args
-    model_config["denoiser"] = denoiser; model_config["diffusion_sampler"] = sampler
-    model_config["compile_mode"] = runtime.get("compile_mode", "matched_eager")
-    resolved["model"] = model_config
-    resolved["data"] = dict(resolved["data"])
-    resolved["data"].update({
-        "train_dataset": None, "eval_dataset": None, "pred_batch_size": batch_size,
-        "pred_num_workers": int(runtime.get("num_workers", 1)),
-        "pred_dataset": {
-            "class_path": "pixel_remainder_taylor.pixelgen_io.ManifestNoiseDataset",
-            "init_args": {
-                "manifest_path": str(Path(args.manifest).resolve()), "shard_id": args.shard_id,
-                "world_size": args.world_size, "output_root": str(output), "batch_size": batch_size,
-                "config_hash": config_hash, "checkpoint_path": str(checkpoint),
-                "checkpoint_size": int(checkpoint_info["checkpoint_size"]),
-                "method": method["mode"], "interval": identity_interval,
-                "max_order": identity_max_order, "coordinate_mode": coordinate_mode,
-                "resolution": resolution, "noise_scale": float(runtime.get("noise_scale", 1.0)),
-                "resume": args.resume,
-            },
         },
-    })
+        dataset_init_args={
+            "manifest_path": str(Path(args.manifest).resolve()), "shard_id": args.shard_id,
+            "world_size": args.world_size, "output_root": str(output), "batch_size": batch_size,
+            "config_hash": config_hash, "checkpoint_path": str(checkpoint),
+            "checkpoint_size": int(checkpoint_info["checkpoint_size"]),
+            "method": method["mode"], "interval": identity_interval,
+            "max_order": identity_max_order, "coordinate_mode": coordinate_mode,
+            "resolution": resolution, "noise_scale": float(runtime.get("noise_scale", 1.0)),
+            "resume": args.resume,
+        },
+        pred_batch_size=batch_size,
+        pred_num_workers=int(runtime.get("num_workers", 1)),
+        compile_mode=str(runtime.get("compile_mode", "matched_eager")),
+    )
     invocation = os.environ.get("PIXEL_REMAINDER_INVOCATION_ID", "direct")
     if not invocation or not all(char.isalnum() or char in "._-" for char in invocation):
         raise ValueError("unsafe PIXEL_REMAINDER_INVOCATION_ID")

@@ -48,8 +48,8 @@ def validate_method_config(config: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"method.{key} is fixed at {expected!r}")
     if config.get("cache_dtype", "inherit") not in {"inherit", "fp32"}:
         raise ValueError("method.cache_dtype must be inherit or fp32")
-    if config.get("trace_mode", "full") != "full":
-        raise ValueError("primary runs require method.trace_mode=full")
+    if config.get("trace_mode", "full") not in {"full", "summary"}:
+        raise ValueError("method.trace_mode must be full or summary")
     if mode == "fixed_schedule_parity":
         debug = config.get("debug")
         if not isinstance(debug, Mapping):

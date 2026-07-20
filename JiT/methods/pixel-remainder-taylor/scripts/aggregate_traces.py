@@ -70,24 +70,64 @@ def aggregate(rows: list[dict[str, Any]], *, model: str, run: str) -> dict[str, 
 
     plans: list[dict[str, Any]] = []
     decisions = Counter()
+    summary_span_counts: Counter[int] = Counter()
+    summary_plan_count = 0
+    summary_order_weight = 0.0
+    summary_order_count = 0
+    stage_counts: dict[str, Counter[str]] = {}
     for row in rows:
         trace = row.get("nfe_trace")
-        if not isinstance(trace, list) or len(trace) != int(row["total_nfe"]):
-            raise ValueError("full per-NFE trace is missing or incomplete")
-        for nfe in trace:
-            decisions[str(nfe.get("action", "")).upper()] += 1
-            if "selected_span" in nfe:
-                plans.append(nfe)
+        trace_mode = row.get("trace_mode", "full")
+        if trace_mode == "full":
+            if not isinstance(trace, list) or len(trace) != int(row["total_nfe"]):
+                raise ValueError("full per-NFE trace is missing or incomplete")
+            for nfe in trace:
+                decisions[str(nfe.get("action", "")).upper()] += 1
+                if "selected_span" in nfe:
+                    plans.append(nfe)
+        elif trace_mode == "summary":
+            if trace is not None:
+                raise ValueError("summary trace must not contain nested nfe_trace")
+            decisions["FULL"] += int(row["full_nfe"])
+            decisions["TAYLOR"] += int(row["taylor_nfe"])
+            histogram = row.get("span_histogram")
+            if not isinstance(histogram, dict):
+                raise ValueError("summary trace is missing span_histogram")
+            local_count = 0
+            for span, count in histogram.items():
+                parsed_count = int(count)
+                if parsed_count < 0:
+                    raise ValueError("negative summary span count")
+                summary_span_counts[int(span)] += parsed_count
+                local_count += parsed_count
+            summary_plan_count += local_count
+            selected_order_count = int(row.get("selected_order_count", 0))
+            if selected_order_count < 0 or selected_order_count > local_count:
+                raise ValueError("invalid selected_order_count in summary trace")
+            summary_order_weight += _finite(row.get("mean_selected_order")) * selected_order_count
+            summary_order_count += selected_order_count
+        else:
+            raise ValueError(f"unknown trace_mode: {trace_mode!r}")
+        statistics = row.get("stage_statistics", {})
+        if not isinstance(statistics, dict):
+            raise ValueError("stage_statistics must be a mapping")
+        for stage, values in statistics.items():
+            if not isinstance(values, dict):
+                raise ValueError("stage statistic entry must be a mapping")
+            counts = stage_counts.setdefault(str(stage), Counter())
+            counts["full_nfe"] += int(values.get("full_nfe", 0))
+            counts["taylor_nfe"] += int(values.get("taylor_nfe", 0))
     if decisions["FULL"] != full_nfe or decisions["TAYLOR"] != taylor_nfe:
         raise ValueError("per-NFE trace decisions disagree with trajectory totals")
 
     span_counts = Counter(int(plan["selected_span"]) for plan in plans)
+    span_counts.update(summary_span_counts)
     order_counts = Counter(
         int(plan["selected_order"])
         for plan in plans
         if plan.get("selected_order") is not None
     )
-    plan_count = len(plans)
+    plan_count = len(plans) + summary_plan_count
     cap_int = int(cap)
     result: dict[str, Any] = {
         "model": model,
@@ -113,9 +153,10 @@ def aggregate(rows: list[dict[str, Any]], *, model: str, run: str) -> dict[str, 
         ),
         "mean_selected_order": (
             sum(order * count for order, count in order_counts.items())
-            / sum(order_counts.values())
-            if order_counts else 0.0
-        ),
+            + summary_order_weight
+        ) / (sum(order_counts.values()) + summary_order_count) if (
+            order_counts or summary_order_count
+        ) else 0.0,
         "span_cap_hit_ratio": span_counts[cap_int] / plan_count if plan_count else 0.0,
         "controller_time_ms": sum(_finite(row.get("controller_time_ms")) for row in rows),
         "pixel_history_update_time_ms": sum(
@@ -151,6 +192,9 @@ def aggregate(rows: list[dict[str, Any]], *, model: str, run: str) -> dict[str, 
         ratio = span_counts[span] / plan_count if plan_count else 0.0
         result[f"span_{span}_ratio"] = ratio
         result[f"planned_span_{span}_ratio"] = ratio
+    for stage, counts in sorted(stage_counts.items()):
+        result[f"stage_{stage}_full_nfe"] = counts["full_nfe"]
+        result[f"stage_{stage}_taylor_nfe"] = counts["taylor_nfe"]
     return result
 
 

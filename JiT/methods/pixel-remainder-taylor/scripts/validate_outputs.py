@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import numbers
 import sys
 from pathlib import Path
 
@@ -34,6 +36,22 @@ from taylorseer_style.metadata import (  # noqa: E402
     load_json,
     source_tree_sha256,
 )
+
+
+def _assert_finite_numbers(value: object, path: str = "trace") -> None:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return
+    if isinstance(value, numbers.Real):
+        if not math.isfinite(float(value)):
+            raise ValueError(f"non-finite numeric value at {path}")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_finite_numbers(item, f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_finite_numbers(item, f"{path}[{index}]")
 
 
 def main() -> None:
@@ -110,17 +128,40 @@ def main() -> None:
     dynamic_plan_seen = False
     dynamic_taylor_seen = False
     for trace in trace_rows:
+        _assert_finite_numbers(trace)
         if trace.get("call_count_valid") is not True:
             raise ValueError("trajectory has invalid call count")
         if int(trace.get("total_nfe", 0)) != 99:
             raise ValueError("trajectory does not have 99 NFE")
         if int(trace.get("network_forward_count", -1)) != expected_forwards:
             raise ValueError("trajectory has an extra or missing model forward")
-        if len(trace.get("nfe_trace", [])) != 99:
-            raise ValueError("trajectory is missing its full per-NFE trace")
+        full_nfe = int(trace.get("full_nfe", -1))
+        taylor_nfe = int(trace.get("taylor_nfe", -1))
+        order1_nfe = int(trace.get("order1_taylor_nfe", -1))
+        order2_nfe = int(trace.get("order2_taylor_nfe", -1))
+        if full_nfe + taylor_nfe != 99:
+            raise ValueError("trajectory Full/Taylor counts do not total 99")
+        if order1_nfe + order2_nfe != taylor_nfe:
+            raise ValueError("trajectory Taylor order counts are inconsistent")
+        trace_mode = trace.get("trace_mode", run.get("trace_mode", "full"))
+        nested = trace.get("nfe_trace")
+        if trace_mode == "full":
+            if not isinstance(nested, list) or len(nested) != 99:
+                raise ValueError("trajectory is missing its full per-NFE trace")
+        elif trace_mode == "summary":
+            if nested is not None:
+                raise ValueError("summary trace contains a nested per-NFE trace")
+            for field in (
+                "span_histogram", "stage_statistics", "risk_summary",
+                "controller_time_ms", "cache_bytes", "cache_tensor_count",
+            ):
+                if field not in trace:
+                    raise ValueError(f"summary trace is missing {field}")
+        else:
+            raise ValueError(f"unknown trace_mode {trace_mode!r}")
         dynamic_taylor_seen |= int(trace.get("taylor_nfe", 0)) > 0
         traced_sample_ids.extend(int(value) for value in trace.get("sample_ids", []))
-        for nfe in trace["nfe_trace"]:
+        for nfe in nested or []:
             required = {
                 "nfe_index", "macro_step_index", "solver_stage", "continuous_t",
                 "action", "full_reason", "active_forecast_order",
@@ -132,6 +173,7 @@ def main() -> None:
             if missing:
                 raise ValueError(f"per-NFE trace is missing fields: {sorted(missing)}")
             dynamic_plan_seen |= int(nfe.get("selected_span", 0)) > 0
+        dynamic_plan_seen |= int(trace.get("max_planned_span", 0)) > 0
     expected_sample_ids = sorted(row.sample_id for row in records)
     if sorted(traced_sample_ids) != expected_sample_ids:
         raise ValueError("trajectory traces do not cover each real sample ID exactly once")
