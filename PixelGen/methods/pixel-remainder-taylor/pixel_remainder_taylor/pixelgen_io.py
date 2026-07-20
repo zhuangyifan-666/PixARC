@@ -15,8 +15,32 @@ if str(_TAYLOR_BASE) not in sys.path:
 
 from taylorseer_style.pixelgen_io import (  # noqa: E402
     AtomicManifestSaveHook as _BaseSaveHook,
-    ManifestNoiseDataset,
+    ManifestNoiseDataset as _BaseManifestNoiseDataset,
 )
+
+
+class ManifestNoiseDataset(_BaseManifestNoiseDataset):
+    """Add explicit raw/resolved configuration identities to every sample."""
+
+    def __init__(
+        self,
+        *,
+        input_config_sha256: str,
+        resolved_config_sha256: str,
+        semantic_config_hash: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._config_identity = {
+            "input_config_sha256": str(input_config_sha256),
+            "resolved_config_sha256": str(resolved_config_sha256),
+            "semantic_config_hash": str(semantic_config_hash),
+        }
+
+    def __getitem__(self, index: int):
+        noise, class_id, metadata = super().__getitem__(index)
+        metadata.update(self._config_identity)
+        return noise, class_id, metadata
 
 
 class AtomicManifestSaveHook(_BaseSaveHook):

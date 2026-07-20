@@ -1,6 +1,15 @@
 """Pixel-Remainder Taylor: adaptive, single-trajectory TaylorSeer control."""
 
-from .config import SCHEMA_VERSION, load_config, validate_method_config, validate_root_config
+from .config import (
+    SCHEMA_VERSION,
+    canonical_yaml_bytes,
+    load_config,
+    materialize_config,
+    semantic_config_sha256,
+    validate_method_config,
+    validate_resolved_config,
+    validate_root_config,
+)
 from .controller import SegmentPlan, plan_segment, split_bands
 from .runtime import PixelRemainderRuntime
 from .scheduler import expected_network_forward_count, expected_nfe_count
@@ -9,11 +18,15 @@ __all__ = [
     "PixelRemainderRuntime",
     "SCHEMA_VERSION",
     "SegmentPlan",
+    "canonical_yaml_bytes",
     "expected_network_forward_count",
     "expected_nfe_count",
     "load_config",
+    "materialize_config",
     "plan_segment",
     "split_bands",
+    "semantic_config_sha256",
     "validate_method_config",
+    "validate_resolved_config",
     "validate_root_config",
 ]

@@ -4,6 +4,13 @@ All generation roots must be outside the Git checkout. The launcher refuses a
 dirty executable worktree, a non-empty run without `--resume`, a manifest count
 mismatch, busy/aliased GPUs, or fewer/more than four physical GPUs.
 
+Each run archives the exact authoring YAML as `input_config.yaml` and a separate
+canonical, parent-expanded, portable YAML as `config_resolved.yaml`. The latter
+has no `extends`, has `template_only: false`, and contains an absolute existing
+checkpoint. On resume, both raw bytes and a newly resolved parent chain must
+match the archived files. The launcher owns these files; generators only read
+and validate them.
+
 ## Environment
 
 ```bash
@@ -27,6 +34,7 @@ checkpoint files; the launcher snapshots the exact YAML bytes into each output.
 ```bash
 cd "$REPAIR"
 JiT/methods/pixel-remainder-taylor/scripts/run_all_cpu_tests.sh
+JiT/methods/pixel-remainder-taylor/scripts/preflight_all_configs.sh
 
 "$JIT_PYTHON" JiT/methods/pixel-remainder-taylor/scripts/build_smoke_manifest.py \
   --manifest results/JiT/baselines/taylorseer/protocol/manifest_1k.jsonl \
@@ -109,6 +117,12 @@ Do not start 1K unless all CPU tests, Full/fixed/dynamic smoke runs, parity
 checks, forward counts, resume validation, and the nondecreasing average Taylor
 ratio from tau 0.01 to 0.04 pass.
 
+Every formal command below reruns the no-GPU input preflight inside the launcher
+before it inspects or locks a GPU. Add `--resume` only to the exact same command
+and output root after a controlled incomplete invocation. Raw YAML formatting,
+PixelGen parent semantics, manifest, sidecar, checkpoint size, code tree and
+runtime identity must remain unchanged.
+
 ## Six new-method 1K runs
 
 ```bash
@@ -188,10 +202,12 @@ cd "$REPAIR"
 
 export SELECTED_TAU=0.02
 "$JIT_PYTHON" JiT/methods/pixel-remainder-taylor/scripts/materialize_50k_config.py \
+  --model JiT \
   --base "$CONFIG_SOURCE/JiT/methods/pixel-remainder-taylor/configs/jit_b16_256_prt_t0p02_h3.yaml" \
   --output "$RUN_ROOT/protocol/jit_selected_50k.yaml" \
   --tau "$SELECTED_TAU" --max-taylor-span 3
 "$JIT_PYTHON" JiT/methods/pixel-remainder-taylor/scripts/materialize_50k_config.py \
+  --model PixelGen \
   --base "$CONFIG_SOURCE/PixelGen/methods/pixel-remainder-taylor/configs/pixelgen_xl_256_prt_t0p02_h3.yaml" \
   --output "$RUN_ROOT/protocol/pixelgen_selected_50k.yaml" \
   --tau "$SELECTED_TAU" --max-taylor-span 3

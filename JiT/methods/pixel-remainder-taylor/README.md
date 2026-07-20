@@ -18,6 +18,39 @@ pooling at 8, and batch reduction at the real-batch mean. `instrumented_full`
 and `fixed_schedule_parity` are smoke/debug configurations and must not be used
 as extra 1K trajectories.
 
+## Immutable production configuration
+
+Every launcher-owned run directory contains two different immutable files:
+
+- `input_config.yaml` is the byte-for-byte user input. A comment or whitespace
+  change makes `--resume` fail.
+- `config_resolved.yaml` is canonical, self-contained YAML. PixelGen `extends`
+  is expanded before launch, `template_only` is false, and the checkpoint is an
+  existing absolute path.
+
+The launcher re-materializes the current child and parent chain on every
+resume, so a changed PixelGen parent is rejected even when the child bytes are
+unchanged. Generators only validate these files; they never overwrite them.
+`run_manifest.json` and per-image metadata distinguish
+`input_config_sha256`, `resolved_config_sha256`, and `semantic_config_hash`.
+
+Run the no-GPU production preflight with the model-family Python:
+
+```bash
+PIXEL_REMAINDER_PYTHON=/root/miniconda3/envs/jit/bin/python \
+  /root/miniconda3/envs/jit/bin/python \
+  JiT/methods/pixel-remainder-taylor/scripts/preflight_run.py \
+  --model JiT \
+  --input-config /absolute/config/source/jit_b16_256_prt_t0p02_h3.yaml \
+  --manifest results/JiT/baselines/taylorseer/protocol/manifest_1k.jsonl \
+  --expected-count 1000
+```
+
+`preflight_run.py` checks the clean executable worktree, checkpoint, full
+config chain, manifest/sidecar protocol, count and both config hashes in a
+temporary directory. It performs no `nvidia-smi` or CUDA query and does not
+touch the formal output root.
+
 ## Local CPU verification
 
 ```bash
@@ -27,6 +60,8 @@ python -m pytest -q -p no:cacheprovider \
 PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' \
 python -m pytest -q -p no:cacheprovider \
   PixelGen/methods/pixel-remainder-taylor/tests
+JiT/methods/pixel-remainder-taylor/scripts/run_all_cpu_tests.sh
+JiT/methods/pixel-remainder-taylor/scripts/preflight_all_configs.sh
 ```
 
 ## Remote prerequisites
@@ -111,7 +146,8 @@ done
 
 The restart-safe cumulative launcher wall clock is in `launcher_timing.json`;
 individual invocations are immutable records below `launcher_invocations/`.
-Each output contains immutable input snapshots,
+Each output contains immutable `input_config.yaml`, self-contained
+`config_resolved.yaml`, manifest/sidecar snapshots,
 per-image metadata, per-rank summaries, and complete JSONL trajectory traces.
 
 ## Evaluation and final tables

@@ -18,7 +18,9 @@ for item in (METHOD_ROOT, BASELINE_ROOT):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
-from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.config import (  # noqa: E402
+    validate_archived_config_contract,
+)
 from pixel_remainder_taylor.protocol import (  # noqa: E402
     executable_tree_sha256,
     resolve_manifest_sidecar,
@@ -66,9 +68,16 @@ def main() -> None:
     records = load_manifest(manifest_path)
     validate_manifest(records, expected_count=args.expected_count)
     run = load_json(root / "run_manifest.json")
-    config = load_config(root / "config_resolved.yaml")
-    if run.get("input_config_hash") != canonical_hash(config):
-        raise ValueError("run manifest is not bound to config_resolved.yaml")
+    _config, config_identity = validate_archived_config_contract(
+        root,
+        root / "config_resolved.yaml",
+        model="PixelGen" if run.get("model") == "PixelGen-JiT" else "JiT",
+    )
+    for field, expected in config_identity.items():
+        if run.get(field) != expected:
+            raise ValueError(f"run manifest is not bound to archived config: {field}")
+    if run.get("input_config_hash") != config_identity["semantic_config_hash"]:
+        raise ValueError("legacy input_config_hash is not the semantic config hash")
     missing_pairing = [field for field in PAIRING_FIELDS if field not in run]
     if missing_pairing:
         raise ValueError(f"run manifest is missing pairing fields: {missing_pairing}")
@@ -100,7 +109,7 @@ def main() -> None:
         expected_count=args.expected_count, resolution=args.resolution,
     )
     expected_identity = {
-        "config_hash": run["input_config_hash"], "checkpoint_path": run["checkpoint_path"],
+        "config_hash": run["semantic_config_hash"], "checkpoint_path": run["checkpoint_path"],
         "checkpoint_size": run["checkpoint_size"], "manifest_sha256": run["manifest_sha256"],
         "method": run["method"], "interval": int(run["identity_interval"]),
         "max_order": int(run["identity_max_order"]),

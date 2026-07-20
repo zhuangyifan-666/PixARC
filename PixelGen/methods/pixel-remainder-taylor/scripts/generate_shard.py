@@ -9,11 +9,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import torch
-import yaml
 
 
 METHOD_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +24,11 @@ for item in (METHOD_ROOT, SHARED_ROOT, BASELINE_ROOT):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
-from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.config import (  # noqa: E402
+    canonical_yaml_bytes,
+    immutable_write_bytes,
+    validate_archived_config_contract,
+)
 from pixel_remainder_taylor.finite_difference import (  # noqa: E402
     MAX_INTERPOLATION_WEIGHT_L1,
 )
@@ -57,40 +59,8 @@ from taylorseer_style.metadata import (  # noqa: E402
 TAYLORSEER_COMMIT = "704ee98c74f7f04da443daa3c0aa2cc7803d86e3"
 
 
-def _checkpoint(value: str, origin: Path) -> Path:
-    candidate = Path(value).expanduser()
-    choices = [candidate] if candidate.is_absolute() else [origin / candidate, PIXARC_ROOT / candidate]
-    for path in choices:
-        if path.is_file():
-            return path.resolve()
-    raise FileNotFoundError(f"checkpoint not found; checked {choices}")
-
-
-def _atomic_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != content:
-            raise FileExistsError(f"immutable run input differs: {path}")
-        return
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content); handle.flush(); os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-
-
 def _write_yaml(path: Path, value: object) -> None:
-    content = yaml.safe_dump(value, sort_keys=False).encode("utf-8")
-    _atomic_bytes(path, content)
+    immutable_write_bytes(path, canonical_yaml_bytes(value))
 
 
 def build_resolved_cli_config(
@@ -160,8 +130,15 @@ def main() -> None:
     if len(visible) != 1:
         raise RuntimeError("one shard process must see exactly one CUDA GPU")
 
+    output = Path(args.output_root).resolve()
+    if output == PIXARC_ROOT or PIXARC_ROOT in output.parents:
+        raise ValueError("generation output must be outside the PixARC checkout")
+    for name in ("samples", "metadata", "summaries", "traces", "logs"):
+        (output / name).mkdir(parents=True, exist_ok=True)
     config_path = Path(args.config).resolve(strict=True)
-    config = load_config(config_path)
+    config, config_identity = validate_archived_config_contract(
+        output, config_path, model="PixelGen"
+    )
     runtime = dict(config["runtime"]); method = dict(config["method"])
     debug = dict(method.get("debug", {}))
     fixed_parity = method["mode"] == "fixed_schedule_parity"
@@ -181,28 +158,27 @@ def main() -> None:
     sampler_args = dict(sampler["init_args"])
     if sampler_args.get("exact_henu") is not True or int(sampler_args.get("num_steps", 0)) != 50:
         raise ValueError("official runs require exact 50-step Heun")
-    origin = Path(args.config_origin_dir).resolve(strict=True) if args.config_origin_dir else config_path.parent
-    checkpoint = _checkpoint(str(config["checkpoint"]), origin)
+    checkpoint = Path(str(config["checkpoint"])).resolve(strict=True)
+    if not checkpoint.is_absolute():
+        raise ValueError("resolved PixelGen checkpoint must be absolute")
     checkpoint_info = checkpoint_identity(checkpoint)
     denoiser = dict(model_config["denoiser"]); denoiser_args = dict(denoiser["init_args"])
     resolution = int(denoiser_args.get("input_size", 256)); batch_size = int(runtime["batch_size"])
-    records = load_manifest(args.manifest)
+    manifest_path = Path(args.manifest).resolve(strict=True)
+    if manifest_path != (output / "input_manifest.jsonl").resolve(strict=True):
+        raise ValueError("production generator requires launcher-owned input_manifest.jsonl")
+    records = load_manifest(manifest_path)
     validate_manifest(records, world_size=args.world_size, batch_size=batch_size)
     sidecar, _sidecar_metadata = validate_compatible_manifest_sidecar(
-        args.manifest, records, world_size=args.world_size, batch_size=batch_size,
+        manifest_path, records, world_size=args.world_size, batch_size=batch_size,
         validator=validate_manifest_sidecar,
         generator_device="cpu", noise_dtype="float32", noise_shape=(3, resolution, resolution),
     )
-    output = Path(args.output_root).resolve()
-    if output == PIXARC_ROOT or PIXARC_ROOT in output.parents:
-        raise ValueError("generation output must be outside the PixARC checkout")
-    for name in ("samples", "metadata", "summaries", "traces", "logs"):
-        (output / name).mkdir(parents=True, exist_ok=True)
-    _write_yaml(output / "config_resolved.yaml", config)
-    _atomic_bytes(output / "input_manifest.jsonl", Path(args.manifest).resolve().read_bytes())
-    _atomic_bytes(output / "input_manifest.jsonl.meta.json", sidecar.resolve().read_bytes())
+    if sidecar.resolve() != (output / "input_manifest.jsonl.meta.json").resolve(strict=True):
+        raise ValueError("production generator requires launcher-owned manifest sidecar")
 
-    config_hash = canonical_hash(config); manifest_hash = sha256_file(args.manifest)
+    config_hash = config_identity["semantic_config_hash"]
+    manifest_hash = sha256_file(manifest_path)
     metadata_path = output / "metadata" / f"rank_{args.shard_id}.jsonl"
     trace_path = output / "traces" / f"rank_{args.shard_id}.jsonl"
     if (metadata_path.exists() or trace_path.exists()) and not args.resume:
@@ -247,6 +223,8 @@ def main() -> None:
         "model": "PixelGen-JiT",
         "model_config_hash": canonical_hash(normalized_model),
         "ema": "ema_denoiser",
+        **config_identity,
+        # Compatibility field: this remains the semantic mapping hash.
         "input_config_hash": config_hash,
         "port_source_sha256": source_tree_sha256(BASELINE_ROOT),
         "method_source_sha256": method_source_hash,
@@ -288,6 +266,7 @@ def main() -> None:
     )
     run_value.update({
         "method_schema_version": config["schema_version"],
+        **config_identity,
         "input_config_hash": config_hash,
         "method_source_sha256": method_source_hash,
         "tau": method.get("tau"),
@@ -312,7 +291,8 @@ def main() -> None:
         atomic_create_json(run_manifest, run_value)
     existing_run = load_json(run_manifest)
     for key in (
-        "config", "input_config_hash", "manifest_sha256",
+        "config", "input_config_hash", "input_config_sha256",
+        "resolved_config_sha256", "semantic_config_hash", "manifest_sha256",
         "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
         "method", "tau", "max_taylor_span", "git_commit",
         "pytorch_version", "python_version", "cuda_version",
@@ -355,9 +335,10 @@ def main() -> None:
         "compile_mode": runtime.get("compile_mode", "matched_eager"),
         },
         dataset_init_args={
-            "manifest_path": str(Path(args.manifest).resolve()), "shard_id": args.shard_id,
+            "manifest_path": str(manifest_path), "shard_id": args.shard_id,
             "world_size": args.world_size, "output_root": str(output), "batch_size": batch_size,
             "config_hash": config_hash, "checkpoint_path": str(checkpoint),
+            **config_identity,
             "checkpoint_size": int(checkpoint_info["checkpoint_size"]),
             "method": method["mode"], "interval": identity_interval,
             "max_order": identity_max_order, "coordinate_mode": coordinate_mode,

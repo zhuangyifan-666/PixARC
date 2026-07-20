@@ -8,13 +8,11 @@ import json
 import math
 import os
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import torch
-import yaml
 
 
 METHOD_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +24,9 @@ for item in (UPSTREAM_ROOT, METHOD_ROOT, BASELINE_ROOT):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
-from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.config import (  # noqa: E402
+    validate_archived_config_contract,
+)
 from pixel_remainder_taylor.finite_difference import (  # noqa: E402
     MAX_INTERPOLATION_WEIGHT_L1,
 )
@@ -86,15 +86,6 @@ def _args(config: dict[str, object]) -> SimpleNamespace:
     )
 
 
-def _checkpoint(value: str, config_path: Path, origin: Path) -> Path:
-    candidate = Path(value).expanduser()
-    choices = [candidate] if candidate.is_absolute() else [origin / candidate, PIXARC_ROOT / candidate]
-    for path in choices:
-        if path.is_file():
-            return path.resolve()
-    raise FileNotFoundError(f"checkpoint not found; checked {choices}")
-
-
 def _load_ema1(model: PixelRemainderTaylorDenoiser, checkpoint: Path) -> None:
     state = torch.load(checkpoint, map_location="cpu")
     if not all(key in state for key in ("model", "model_ema1")):
@@ -106,28 +97,6 @@ def _load_ema1(model: PixelRemainderTaylorDenoiser, checkpoint: Path) -> None:
             if name not in ema:
                 raise KeyError(f"EMA1 is missing parameter {name}")
             parameter.copy_(ema[name])
-
-
-def _atomic_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != content:
-            raise FileExistsError(f"immutable run input differs: {path}")
-        return
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content); handle.flush(); os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
 
 
 def _append(handle, value: dict[str, object]) -> None:
@@ -165,8 +134,13 @@ def main() -> None:
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
         raise RuntimeError("one shard process must see exactly one CUDA GPU")
 
+    output = Path(args.output_root).resolve(); _assert_external(output)
+    for name in ("samples", "metadata", "summaries", "traces"):
+        (output / name).mkdir(parents=True, exist_ok=True)
     config_path = Path(args.config).resolve(strict=True)
-    config = load_config(config_path)
+    config, config_identity = validate_archived_config_contract(
+        output, config_path, model="JiT"
+    )
     runtime = dict(config["runtime"]); method = dict(config["method"])
     sampling = dict(config["sampling"]); model_config = dict(config["model"])
     debug = dict(method.get("debug", {}))
@@ -186,26 +160,26 @@ def main() -> None:
         raise ValueError("official runs require exact 50-step Heun")
     if int(sampling.get("steps", 0)) != 50:
         raise ValueError("official runs require 50 sampling steps")
-    origin = Path(args.config_origin_dir).resolve(strict=True) if args.config_origin_dir else config_path.parent
-    checkpoint = _checkpoint(str(model_config["checkpoint"]), config_path, origin)
+    checkpoint = Path(str(model_config["checkpoint"])).resolve(strict=True)
+    if not checkpoint.is_absolute():
+        raise ValueError("resolved JiT checkpoint must be absolute")
     identity = checkpoint_identity(checkpoint)
-    records = load_manifest(args.manifest)
+    manifest_path = Path(args.manifest).resolve(strict=True)
+    if manifest_path != (output / "input_manifest.jsonl").resolve(strict=True):
+        raise ValueError("production generator requires launcher-owned input_manifest.jsonl")
+    records = load_manifest(manifest_path)
     batch_size = int(runtime["batch_size"]); resolution = int(model_config.get("image_size", 256))
     validate_manifest(records, world_size=args.world_size, batch_size=batch_size)
     sidecar, _sidecar_metadata = validate_compatible_manifest_sidecar(
-        args.manifest, records, world_size=args.world_size, batch_size=batch_size,
+        manifest_path, records, world_size=args.world_size, batch_size=batch_size,
         validator=validate_manifest_sidecar,
         generator_device="cuda", noise_dtype="float32", noise_shape=(3, resolution, resolution),
     )
-    output = Path(args.output_root).resolve(); _assert_external(output)
-    for name in ("samples", "metadata", "summaries", "traces"):
-        (output / name).mkdir(parents=True, exist_ok=True)
-    resolved_yaml = yaml.safe_dump(config, sort_keys=False).encode("utf-8")
-    _atomic_bytes(output / "config_resolved.yaml", resolved_yaml)
-    _atomic_bytes(output / "input_manifest.jsonl", Path(args.manifest).resolve().read_bytes())
-    _atomic_bytes(output / "input_manifest.jsonl.meta.json", sidecar.resolve().read_bytes())
+    if sidecar.resolve() != (output / "input_manifest.jsonl.meta.json").resolve(strict=True):
+        raise ValueError("production generator requires launcher-owned manifest sidecar")
 
-    config_hash = canonical_hash(config); manifest_hash = sha256_file(args.manifest)
+    config_hash = config_identity["semantic_config_hash"]
+    manifest_hash = sha256_file(manifest_path)
     metadata_path = output / "metadata" / f"rank_{args.shard_id}.jsonl"
     trace_path = output / "traces" / f"rank_{args.shard_id}.jsonl"
     if (metadata_path.exists() or trace_path.exists()) and not args.resume:
@@ -229,6 +203,8 @@ def main() -> None:
             {**model_config, "checkpoint": str(checkpoint)}
         ),
         "ema": "EMA1",
+        **config_identity,
+        # Compatibility field: this has always been the semantic mapping hash.
         "input_config_hash": config_hash,
         "port_source_sha256": source_tree_sha256(BASELINE_ROOT),
         "method_source_sha256": executable_tree_sha256(METHOD_ROOT),
@@ -267,6 +243,7 @@ def main() -> None:
     )
     manifest_value.update({
         "method_schema_version": config["schema_version"],
+        **config_identity,
         "input_config_hash": config_hash,
         "method_source_sha256": run_config["method_source_sha256"],
         "tau": method.get("tau"),
@@ -291,7 +268,8 @@ def main() -> None:
         atomic_create_json(run_manifest, manifest_value)
     existing_run = load_json(run_manifest)
     for key in (
-        "config", "input_config_hash", "manifest_sha256",
+        "config", "input_config_hash", "input_config_sha256",
+        "resolved_config_sha256", "semantic_config_hash", "manifest_sha256",
         "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
         "method", "tau", "max_taylor_span", "git_commit",
         "pytorch_version", "python_version", "cuda_version",
@@ -374,6 +352,7 @@ def main() -> None:
                     "sample_id": row.sample_id, "class_id": row.class_id, "seed": row.seed,
                     "batch_group_id": row.batch_group_id, "position_in_batch": row.position_in_batch,
                     "manifest_sha256": manifest_hash, "config_hash": config_hash,
+                    **config_identity,
                     "checkpoint_path": str(checkpoint), "checkpoint_size": int(identity["checkpoint_size"]),
                     "method": method["mode"], "interval": identity_interval,
                     "max_order": identity_max_order, "coordinate_mode": coordinate_mode,

@@ -193,7 +193,7 @@ def test_launcher_timing_accumulates_partial_resume(tmp_path: Path):
 
 def test_snapshot_and_timing_identity_changes_fail_closed(tmp_path: Path):
     source = tmp_path / "config.yaml"
-    archived = tmp_path / "run/config_resolved.yaml"
+    archived = tmp_path / "run/input_config.yaml"
     source.write_text("tau: 0.01\n", encoding="utf-8")
     atomic_snapshot(source, archived)
     source.write_text("tau: 0.04\n", encoding="utf-8")

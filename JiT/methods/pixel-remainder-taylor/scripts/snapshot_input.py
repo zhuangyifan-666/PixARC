@@ -4,36 +4,20 @@
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
-import tempfile
+import sys
 from pathlib import Path
+
+
+METHOD_ROOT = Path(__file__).resolve().parents[1]
+if str(METHOD_ROOT) not in sys.path:
+    sys.path.insert(0, str(METHOD_ROOT))
+
+from pixel_remainder_taylor.config import immutable_write_bytes  # noqa: E402
 
 
 def atomic_snapshot(source: Path, destination: Path) -> None:
     source = source.resolve(strict=True)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        if source.read_bytes() != destination.read_bytes():
-            raise FileExistsError(f"archived input differs: {destination}")
-        return
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.snapshot.", suffix=".tmp", dir=destination.parent
-    )
-    try:
-        with source.open("rb") as source_handle, os.fdopen(
-            descriptor, "wb"
-        ) as destination_handle:
-            shutil.copyfileobj(source_handle, destination_handle)
-            destination_handle.flush()
-            os.fsync(destination_handle.fileno())
-        os.replace(temporary_name, destination)
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    immutable_write_bytes(destination, source.read_bytes())
 
 
 def main() -> None:
