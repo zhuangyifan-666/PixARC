@@ -10,6 +10,7 @@ from build_comparison import mark_model_family_pareto, normalize
 from evaluate_1k import PAIRING_PROTOCOL_FIELDS, validate_pairing_protocol
 from launcher_timing import record_invocation
 from validate_dynamic_matrix import validate_dynamic_matrix
+from validate_outputs import port_source_root
 from pixel_remainder_taylor.protocol import (
     resolve_manifest_sidecar,
     validate_compatible_manifest_sidecar,
@@ -315,6 +316,18 @@ def test_dynamic_matrix_requires_monotonic_taylor_ratio():
             _dynamic_summary(tau=0.01, taylor_nfe=12),
             _dynamic_summary(tau=0.04, taylor_nfe=4),
         )
+
+
+def test_output_validator_selects_model_specific_port_source():
+    root = Path(__file__).resolve().parents[4]
+    assert port_source_root("JiT-B/16") == (
+        root / "JiT/baselines/taylorseer-style"
+    )
+    assert port_source_root("PixelGen-JiT") == (
+        root / "PixelGen/baselines/taylorseer-style"
+    )
+    with pytest.raises(ValueError, match="unknown run model"):
+        port_source_root("wrong-model")
 
 
 def test_pairing_protocol_checks_every_frozen_semantic_field():

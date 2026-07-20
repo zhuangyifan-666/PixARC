@@ -13,8 +13,11 @@ from pathlib import Path
 
 METHOD_ROOT = Path(__file__).resolve().parents[1]
 PIXARC_ROOT = Path(__file__).resolve().parents[4]
-BASELINE_ROOT = PIXARC_ROOT / "JiT" / "baselines" / "taylorseer-style"
-for item in (METHOD_ROOT, BASELINE_ROOT):
+JIT_BASELINE_ROOT = PIXARC_ROOT / "JiT" / "baselines" / "taylorseer-style"
+PIXELGEN_BASELINE_ROOT = (
+    PIXARC_ROOT / "PixelGen" / "baselines" / "taylorseer-style"
+)
+for item in (METHOD_ROOT, JIT_BASELINE_ROOT):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
@@ -56,6 +59,14 @@ def _assert_finite_numbers(value: object, path: str = "trace") -> None:
             _assert_finite_numbers(item, f"{path}[{index}]")
 
 
+def port_source_root(model_identity: object) -> Path:
+    if model_identity == "JiT-B/16":
+        return JIT_BASELINE_ROOT
+    if model_identity == "PixelGen-JiT":
+        return PIXELGEN_BASELINE_ROOT
+    raise ValueError(f"unknown run model identity: {model_identity!r}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", required=True)
@@ -81,7 +92,9 @@ def main() -> None:
     missing_pairing = [field for field in PAIRING_FIELDS if field not in run]
     if missing_pairing:
         raise ValueError(f"run manifest is missing pairing fields: {missing_pairing}")
-    if run.get("port_source_sha256") != source_tree_sha256(BASELINE_ROOT):
+    if run.get("port_source_sha256") != source_tree_sha256(
+        port_source_root(run.get("model"))
+    ):
         raise ValueError("run manifest TaylorSeer port source hash is stale")
     method_source = executable_tree_sha256(METHOD_ROOT)
     if run.get("model") == "PixelGen-JiT":
