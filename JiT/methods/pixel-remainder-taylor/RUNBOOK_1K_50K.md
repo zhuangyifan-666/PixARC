@@ -86,6 +86,19 @@ do
 done
 ```
 
+Validate the two dynamic runs as a single protocol gate.  A conservative lower
+tau is allowed to remain all-Full, but at least one run must execute Taylor and
+the Taylor ratio must not decrease as tau increases:
+
+```bash
+"$JIT_PYTHON" JiT/methods/pixel-remainder-taylor/scripts/validate_dynamic_matrix.py \
+  --lower-run "$RUN_ROOT/smoke/jit_dynamic_t0p01" \
+  --upper-run "$RUN_ROOT/smoke/jit_dynamic_t0p04"
+"$PIXELGEN_PYTHON" JiT/methods/pixel-remainder-taylor/scripts/validate_dynamic_matrix.py \
+  --lower-run "$RUN_ROOT/smoke/pixelgen_dynamic_t0p01" \
+  --upper-run "$RUN_ROOT/smoke/pixelgen_dynamic_t0p04"
+```
+
 Pixel-identical Full and fixed-schedule parity checks use the existing frozen
 baseline images and the smoke manifests:
 

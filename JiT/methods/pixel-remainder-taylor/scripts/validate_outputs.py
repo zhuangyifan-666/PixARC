@@ -186,15 +186,17 @@ def main() -> None:
     expected_sample_ids = sorted(row.sample_id for row in records)
     if sorted(traced_sample_ids) != expected_sample_ids:
         raise ValueError("trajectory traces do not cover each real sample ID exactly once")
-    if run["method"] == "pixel_remainder_taylor" and (
-        not dynamic_plan_seen or not dynamic_taylor_seen
-    ):
-        raise ValueError(
-            "adaptive run never executed a nonzero dynamic Taylor segment"
-        )
+    # A conservative tau may legitimately choose Full for every NFE.  The
+    # protocol's nonzero-Taylor and monotonicity requirements apply to the
+    # lower/upper-tau smoke matrix, not to each adaptive run in isolation.
+    # validate_dynamic_matrix.py enforces those cross-run gates.
     print(json.dumps({
-        **validation, "identity_validation": "passed",
-        "trajectory_count": len(trace_rows), "forward_contract": "passed",
+        **validation,
+        "dynamic_plan_seen": dynamic_plan_seen,
+        "dynamic_taylor_seen": dynamic_taylor_seen,
+        "identity_validation": "passed",
+        "trajectory_count": len(trace_rows),
+        "forward_contract": "passed",
     }, indent=2, sort_keys=True))
 
 

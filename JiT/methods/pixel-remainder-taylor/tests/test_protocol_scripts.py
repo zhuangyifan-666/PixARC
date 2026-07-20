@@ -9,6 +9,7 @@ from aggregate_traces import aggregate
 from build_comparison import mark_model_family_pareto, normalize
 from evaluate_1k import PAIRING_PROTOCOL_FIELDS, validate_pairing_protocol
 from launcher_timing import record_invocation
+from validate_dynamic_matrix import validate_dynamic_matrix
 from pixel_remainder_taylor.protocol import (
     resolve_manifest_sidecar,
     validate_compatible_manifest_sidecar,
@@ -276,6 +277,44 @@ def test_trace_aggregation_rejects_duplicate_real_samples():
     }
     with pytest.raises(ValueError, match="duplicate"):
         aggregate([base, dict(base)], model="JiT", run="duplicate")
+
+
+def _dynamic_summary(*, tau: float, taylor_nfe: int) -> dict[str, object]:
+    return {
+        "model": "JiT-B/16",
+        "max_taylor_span": 3,
+        "manifest_records_sha256": "frozen-records",
+        "sample_ids": [0, 1, 2, 3],
+        "tau": tau,
+        "total_nfe": 396,
+        "taylor_nfe": taylor_nfe,
+        "taylor_ratio": taylor_nfe / 396,
+    }
+
+
+def test_dynamic_matrix_allows_conservative_lower_tau():
+    report = validate_dynamic_matrix(
+        _dynamic_summary(tau=0.01, taylor_nfe=0),
+        _dynamic_summary(tau=0.04, taylor_nfe=12),
+    )
+    assert report["status"] == "PASS"
+    assert report["lower_taylor_ratio"] == 0.0
+
+
+def test_dynamic_matrix_requires_nonzero_taylor_across_pair():
+    with pytest.raises(ValueError, match="never executed"):
+        validate_dynamic_matrix(
+            _dynamic_summary(tau=0.01, taylor_nfe=0),
+            _dynamic_summary(tau=0.04, taylor_nfe=0),
+        )
+
+
+def test_dynamic_matrix_requires_monotonic_taylor_ratio():
+    with pytest.raises(ValueError, match="decreased"):
+        validate_dynamic_matrix(
+            _dynamic_summary(tau=0.01, taylor_nfe=12),
+            _dynamic_summary(tau=0.04, taylor_nfe=4),
+        )
 
 
 def test_pairing_protocol_checks_every_frozen_semantic_field():
