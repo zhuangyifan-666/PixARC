@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Evaluate one measured PRT 1K run with the repository's metric primitives."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import sys
+from pathlib import Path
+
+import numpy as np
+
+
+METHOD_ROOT = Path(__file__).resolve().parents[1]
+PIXARC_ROOT = Path(__file__).resolve().parents[4]
+BASELINE_ROOT = PIXARC_ROOT / "JiT" / "baselines" / "taylorseer-style"
+for item in (METHOD_ROOT, BASELINE_ROOT):
+    if str(item) not in sys.path:
+        sys.path.insert(0, str(item))
+
+from aggregate_traces import _read_jsonl, aggregate  # noqa: E402
+from taylorseer_style.distribution_metrics import (  # noqa: E402
+    build_adm_sample_npz,
+    run_adm_evaluator,
+)
+from taylorseer_style.image_io import image_path  # noqa: E402
+from taylorseer_style.manifest import load_manifest, validate_manifest  # noqa: E402
+from taylorseer_style.metadata import atomic_write_json, load_json  # noqa: E402
+from taylorseer_style.paired_metrics import (  # noqa: E402
+    _lpips_values,
+    _summary,
+    load_rgb_float,
+    pair_metrics,
+    psnr_from_mse,
+    validate_pair_manifests,
+    write_rows_csv,
+)
+
+
+QUALITY_KEYS = ("fid", "sfid", "inception_score", "precision", "recall")
+
+
+def _baseline_row(path: Path, model: str) -> dict[str, str]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        matches = [row for row in csv.DictReader(handle) if row["model"] == model and row["run"] == "full"]
+    if len(matches) != 1:
+        raise ValueError(f"expected one TaylorSeer Full row for {model}, found {len(matches)}")
+    return matches[0]
+
+
+def _write_one(path: Path, row: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row))
+        writer.writeheader(); writer.writerow(row)
+
+
+def _paired(
+    reference_dir: Path,
+    candidate_dir: Path,
+    reference_manifest_path: Path,
+    candidate_manifest_path: Path,
+    *,
+    resolution: int,
+    include_lpips: bool,
+    lpips_device: str,
+    lpips_batch_size: int,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    reference_manifest = load_manifest(reference_manifest_path)
+    candidate_manifest = load_manifest(candidate_manifest_path)
+    sample_ids = validate_pair_manifests(reference_manifest, candidate_manifest)
+    index = {row.sample_id: row for row in reference_manifest}
+    mse_values: list[float] = []
+    psnr_values: list[float] = []
+    ssim_values: list[float] = []
+    pairs: list[tuple[Path, Path]] = []
+    rows: list[dict[str, object]] = []
+    for sample_id in sample_ids:
+        reference_path = image_path(reference_dir, sample_id)
+        candidate_path = image_path(candidate_dir, sample_id)
+        if not reference_path.is_file() or not candidate_path.is_file():
+            raise FileNotFoundError(f"missing paired PNG for sample {sample_id}")
+        reference = load_rgb_float(reference_path, resolution)
+        candidate = load_rgb_float(candidate_path, resolution)
+        mse, psnr, ssim = pair_metrics(reference, candidate)
+        mse_values.append(mse); psnr_values.append(psnr); ssim_values.append(ssim)
+        pairs.append((reference_path, candidate_path))
+        manifest_row = index[sample_id]
+        rows.append({
+            "sample_id": sample_id, "class_id": manifest_row.class_id,
+            "seed": manifest_row.seed, "psnr": psnr, "ssim": ssim, "lpips": None,
+            "reference_path": str(reference_path), "candidate_path": str(candidate_path),
+        })
+    lpips_values: list[float] = []
+    lpips_version = None
+    if include_lpips:
+        lpips_values, lpips_version = _lpips_values(
+            pairs, resolution=resolution, device=lpips_device, batch_size=lpips_batch_size
+        )
+        for row, value in zip(rows, lpips_values, strict=True):
+            row["lpips"] = value
+    aggregate_mse = float(np.mean(np.asarray(mse_values, dtype=np.float64)))
+    result: dict[str, object] = {
+        "sample_count": len(rows), "aggregate_mse": aggregate_mse,
+        "psnr_from_aggregate_mse": psnr_from_mse(aggregate_mse),
+        "per_image_psnr": _summary(psnr_values), "ssim": _summary(ssim_values),
+        "exact_pair_count": sum(value == 0.0 for value in mse_values),
+        "nan_counts": {
+            "psnr": sum(math.isnan(value) for value in psnr_values),
+            "ssim": sum(math.isnan(value) for value in ssim_values),
+            "lpips": sum(math.isnan(value) for value in lpips_values),
+        },
+        "inf_counts": {
+            "psnr": sum(math.isinf(value) for value in psnr_values),
+            "ssim": sum(math.isinf(value) for value in ssim_values),
+            "lpips": sum(math.isinf(value) for value in lpips_values),
+        },
+    }
+    if include_lpips:
+        result["lpips"] = {**_summary(lpips_values), "package_version": lpips_version,
+                           "backbone": "alex", "device": lpips_device}
+    return result, rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", required=True, choices=("JiT", "PixelGen"))
+    parser.add_argument("--run", required=True)
+    parser.add_argument("--candidate-root", required=True)
+    parser.add_argument("--reference-root", required=True)
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--reference-manifest", required=True)
+    parser.add_argument("--reference-npz", required=True)
+    parser.add_argument("--evaluator", required=True)
+    parser.add_argument("--elapsed-seconds", required=True, type=float)
+    parser.add_argument("--baseline-summary", default="results/taylorseer_1k_summary.csv")
+    parser.add_argument("--trace", action="append", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--skip-lpips", action="store_true")
+    parser.add_argument("--lpips-device", default="cpu")
+    parser.add_argument("--lpips-batch-size", default=16, type=int)
+    parser.add_argument("--resolution", default=256, type=int)
+    args = parser.parse_args()
+    candidate_root = Path(args.candidate_root).resolve(strict=True)
+    reference_root = Path(args.reference_root).resolve(strict=True)
+    manifest_path = Path(args.manifest).resolve(strict=True)
+    reference_manifest_path = Path(args.reference_manifest).resolve(strict=True)
+    records = load_manifest(manifest_path)
+    validate_manifest(records, expected_count=1000, expected_per_class=1, expected_num_classes=1000)
+    run = load_json(candidate_root / "run_manifest.json")
+    reference_run = load_json(reference_root / "run_manifest.json")
+    if run.get("method") != "pixel_remainder_taylor":
+        raise ValueError("candidate run is not pixel_remainder_taylor")
+    if reference_run.get("method") not in {"upstream_full", "instrumented_full"}:
+        raise ValueError("reference root is not an existing matched Full run")
+    for field in ("model", "checkpoint_size", "manifest_records_sha256"):
+        if run.get(field) != reference_run.get(field):
+            raise ValueError(f"candidate/reference mismatch for {field}")
+    if run.get("manifest_sha256") is None or int(run.get("expected_nfe_per_trajectory", 0)) != 99:
+        raise ValueError("candidate run identity or NFE contract is incomplete")
+    trace = aggregate(_read_jsonl(args.trace), model=args.model, run=args.run)
+    if trace["sample_count"] != 1000:
+        raise ValueError(f"trace covers {trace['sample_count']} samples, expected 1000")
+
+    paired, pair_rows = _paired(
+        reference_root / "samples", candidate_root / "samples",
+        reference_manifest_path, manifest_path, resolution=args.resolution,
+        include_lpips=not args.skip_lpips, lpips_device=args.lpips_device,
+        lpips_batch_size=args.lpips_batch_size,
+    )
+    output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
+    sample_npz = output / f"{args.model.lower()}_{args.run}.samples.npz"
+    build_adm_sample_npz(
+        sample_dir=candidate_root / "samples", manifest=records,
+        output_npz=sample_npz, resolution=args.resolution,
+    )
+    distribution, raw_output = run_adm_evaluator(
+        evaluator=args.evaluator, reference_npz=args.reference_npz, sample_npz=sample_npz
+    )
+    (output / f"{args.model.lower()}_{args.run}_adm_stdout.txt").write_text(raw_output, encoding="utf-8")
+    baseline = _baseline_row(Path(args.baseline_summary), args.model)
+    elapsed = float(args.elapsed_seconds)
+    if not math.isfinite(elapsed) or elapsed <= 0:
+        raise ValueError("elapsed-seconds must be finite and positive")
+    row: dict[str, object] = {
+        "model": args.model, "run": args.run, "method": "pixel_remainder_taylor",
+        "tau": trace["tau"], "max_taylor_span": trace["max_taylor_span"],
+        "sample_count": 1000, "elapsed_seconds": elapsed,
+        "images_per_second": 1000.0 / elapsed,
+        "speedup_vs_full": float(baseline["elapsed_seconds"]) / elapsed,
+    }
+    for key in QUALITY_KEYS:
+        row[key] = distribution[key]
+        baseline_key = "inception_score" if key == "inception_score" else key
+        row[f"delta_{'inception_score' if key == 'inception_score' else key}"] = (
+            float(distribution[key]) - float(baseline[baseline_key])
+        )
+    row.update({
+        "aggregate_mse": paired["aggregate_mse"],
+        "psnr_from_aggregate_mse": paired["psnr_from_aggregate_mse"],
+        "mean_per_image_psnr": paired["per_image_psnr"]["mean"],
+        "median_per_image_psnr": paired["per_image_psnr"]["median"],
+        "mean_ssim": paired["ssim"]["mean"], "median_ssim": paired["ssim"]["median"],
+        "mean_lpips": paired.get("lpips", {}).get("mean", ""),
+        "median_lpips": paired.get("lpips", {}).get("median", ""),
+        "exact_pair_count": paired["exact_pair_count"],
+        "nan_psnr": paired["nan_counts"]["psnr"], "nan_ssim": paired["nan_counts"]["ssim"],
+        "nan_lpips": paired["nan_counts"]["lpips"], "inf_psnr": paired["inf_counts"]["psnr"],
+        "inf_ssim": paired["inf_counts"]["ssim"], "inf_lpips": paired["inf_counts"]["lpips"],
+    })
+    prefix = f"{args.model.lower()}_{args.run}"
+    _write_one(output / f"{prefix}_summary.csv", row)
+    _write_one(output / f"{prefix}_trace.csv", trace)
+    atomic_write_json(output / f"{prefix}_paired.json", paired)
+    atomic_write_json(output / f"{prefix}_distribution.json", distribution)
+    write_rows_csv(output / f"{prefix}_paired_samples.csv", pair_rows)
+    print(json.dumps({"summary": row, "trace": trace}, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

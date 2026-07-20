@@ -1,0 +1,7 @@
+extends: pixelgen_xl_256_base.yaml
+template_only: false
+method:
+  mode: fixed_schedule_parity
+  tau: 0.0
+  max_taylor_span: 3
+  debug: {interval: 3, order: 2}

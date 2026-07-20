@@ -1,0 +1,3 @@
+extends: pixelgen_xl_256_base.yaml
+template_only: false
+method: {tau: 0.04, max_taylor_span: 3}

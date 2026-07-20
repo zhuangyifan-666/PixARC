@@ -1,0 +1,3 @@
+extends: pixelgen_xl_256_base.yaml
+template_only: false
+method: {mode: instrumented_full, tau: 0.0, max_taylor_span: 3}
