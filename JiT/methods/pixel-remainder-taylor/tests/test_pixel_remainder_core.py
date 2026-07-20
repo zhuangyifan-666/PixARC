@@ -374,6 +374,55 @@ def test_fixed_schedule_parity_mode():
     assert actions.count(TAYLOR) == 65
 
 
+def test_fixed_runtime_uses_available_order_without_phase_shift():
+    runtime = PixelRemainderRuntime(
+        mode="fixed_schedule_parity",
+        tau=0.0,
+        max_taylor_span=3,
+        debug_fixed_interval=3,
+        debug_fixed_order=2,
+    )
+    runtime.begin_trajectory(
+        total_nfe=5,
+        expected_streams={"combined_cfg"},
+        trajectory_id="fixed-parity",
+        sample_ids=[0],
+    )
+    actions = []
+    active_orders = []
+    outputs = []
+    for index in range(5):
+        decision = runtime.begin_nfe(
+            macro_step_index=index // 2,
+            solver_stage="predictor" if index % 2 == 0 else "corrector",
+            continuous_t=index / 5,
+            t_next=(index + 1) / 5,
+        )
+        actions.append(decision.action)
+        active_orders.append(decision.active_forecast_order)
+        value = runtime.branch(
+            stream_id="combined_cfg",
+            layer_idx=0,
+            module_name="gate",
+            exact_fn=lambda q=decision.q: torch.tensor([float(q * q)]),
+        )
+        outputs.append(float(value.item()))
+        runtime.mark_stream_complete("combined_cfg")
+        state = torch.zeros(1, 3, 8, 8)
+        runtime.end_nfe(
+            current_state=state,
+            t=0.5,
+            guided_velocity=torch.zeros_like(state),
+        )
+    summary = runtime.end_trajectory()
+    assert actions == [FULL, FULL, TAYLOR, TAYLOR, FULL]
+    assert active_orders == [None, None, 1, 1, None]
+    assert outputs == [16.0, 9.0, 2.0, -5.0, 0.0]
+    assert summary["full_nfe"] == 3
+    assert summary["taylor_nfe"] == 2
+    assert summary["order1_taylor_nfe"] == 2
+
+
 def test_order_override_preserves_higher_factors():
     state = ModuleTaylorState()
     for coordinate, value in zip((5, 4, 3), (1.0, 2.0, 4.0)):

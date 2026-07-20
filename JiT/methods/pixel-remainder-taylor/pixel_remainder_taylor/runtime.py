@@ -171,8 +171,28 @@ class PixelRemainderRuntime:
         self.current_decision = decision
         self.seen_streams.clear()
         if decision.action == TAYLOR:
+            if self.mode == "fixed_schedule_parity":
+                # TaylorSeer starts forecasting after two exact NFEs.  At that
+                # point only the first recursive difference exists even when
+                # max_order=2; the original path uses the available order and
+                # naturally reaches order two after the next Full anchor.
+                effective_order = min(
+                    int(decision.active_forecast_order),
+                    self._feature_order_min(),
+                )
+                if effective_order not in {1, 2}:
+                    decision = self.force_current_full(
+                        "unsafe_forecast_preflight:RuntimeError"
+                    )
+                else:
+                    decision = replace(
+                        decision,
+                        active_forecast_order=effective_order,
+                    )
+                    self.current_decision = decision
             try:
-                self._preflight_taylor(decision)
+                if decision.action == TAYLOR:
+                    self._preflight_taylor(decision)
             except (KeyError, RuntimeError, TypeError, ValueError) as error:
                 decision = self.force_current_full(
                     f"unsafe_forecast_preflight:{type(error).__name__}"
