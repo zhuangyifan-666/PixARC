@@ -17,6 +17,10 @@ for item in (METHOD_ROOT, BASELINE_ROOT):
         sys.path.insert(0, str(item))
 
 from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.protocol import (  # noqa: E402
+    executable_tree_sha256,
+    resolve_manifest_sidecar,
+)
 from taylorseer_style.image_io import load_rank_metadata, validate_outputs  # noqa: E402
 from taylorseer_style.manifest import (  # noqa: E402
     load_manifest,
@@ -24,7 +28,12 @@ from taylorseer_style.manifest import (  # noqa: E402
     sha256_file,
     validate_manifest,
 )
-from taylorseer_style.metadata import canonical_hash, load_json  # noqa: E402
+from taylorseer_style.metadata import (  # noqa: E402
+    PAIRING_FIELDS,
+    canonical_hash,
+    load_json,
+    source_tree_sha256,
+)
 
 
 def main() -> None:
@@ -40,8 +49,22 @@ def main() -> None:
     validate_manifest(records, expected_count=args.expected_count)
     run = load_json(root / "run_manifest.json")
     config = load_config(root / "config_resolved.yaml")
-    if run.get("config_hash") != canonical_hash(config):
+    if run.get("input_config_hash") != canonical_hash(config):
         raise ValueError("run manifest is not bound to config_resolved.yaml")
+    missing_pairing = [field for field in PAIRING_FIELDS if field not in run]
+    if missing_pairing:
+        raise ValueError(f"run manifest is missing pairing fields: {missing_pairing}")
+    if run.get("port_source_sha256") != source_tree_sha256(BASELINE_ROOT):
+        raise ValueError("run manifest TaylorSeer port source hash is stale")
+    method_source = executable_tree_sha256(METHOD_ROOT)
+    if run.get("model") == "PixelGen-JiT":
+        pixelgen_root = PIXARC_ROOT / "PixelGen" / "methods" / "pixel-remainder-taylor"
+        method_source = canonical_hash({
+            "shared": method_source,
+            "pixelgen_adapter": executable_tree_sha256(pixelgen_root),
+        })
+    if run.get("method_source_sha256") != method_source:
+        raise ValueError("run manifest method source hash is stale")
     if run.get("manifest_sha256") != sha256_file(manifest_path):
         raise ValueError("run manifest is not bound to supplied manifest bytes")
     if run.get("manifest_records_sha256") != manifest_records_sha256(records):
@@ -49,7 +72,7 @@ def main() -> None:
     if sha256_file(root / "input_manifest.jsonl") != sha256_file(manifest_path):
         raise ValueError("archived manifest differs from supplied manifest")
     if sha256_file(root / "input_manifest.jsonl.meta.json") != sha256_file(
-        manifest_path.with_suffix(manifest_path.suffix + ".meta.json")
+        resolve_manifest_sidecar(manifest_path)
     ):
         raise ValueError("archived manifest sidecar differs from supplied sidecar")
     world_size = int(run["world_size"])
@@ -59,10 +82,11 @@ def main() -> None:
         expected_count=args.expected_count, resolution=args.resolution,
     )
     expected_identity = {
-        "config_hash": run["config_hash"], "checkpoint_path": run["checkpoint_path"],
+        "config_hash": run["input_config_hash"], "checkpoint_path": run["checkpoint_path"],
         "checkpoint_size": run["checkpoint_size"], "manifest_sha256": run["manifest_sha256"],
-        "method": run["method"], "interval": int(run["max_taylor_span"]) + 1,
-        "max_order": 2, "coordinate_mode": "pixel_remainder_dynamic_v1",
+        "method": run["method"], "interval": int(run["identity_interval"]),
+        "max_order": int(run["identity_max_order"]),
+        "coordinate_mode": run["coordinate_mode"],
         "resolution": args.resolution,
     }
     errors = [
@@ -84,6 +108,7 @@ def main() -> None:
     expected_forwards = int(run["expected_network_forwards_per_trajectory"])
     traced_sample_ids: list[int] = []
     dynamic_plan_seen = False
+    dynamic_taylor_seen = False
     for trace in trace_rows:
         if trace.get("call_count_valid") is not True:
             raise ValueError("trajectory has invalid call count")
@@ -93,6 +118,7 @@ def main() -> None:
             raise ValueError("trajectory has an extra or missing model forward")
         if len(trace.get("nfe_trace", [])) != 99:
             raise ValueError("trajectory is missing its full per-NFE trace")
+        dynamic_taylor_seen |= int(trace.get("taylor_nfe", 0)) > 0
         traced_sample_ids.extend(int(value) for value in trace.get("sample_ids", []))
         for nfe in trace["nfe_trace"]:
             required = {
@@ -109,8 +135,12 @@ def main() -> None:
     expected_sample_ids = sorted(row.sample_id for row in records)
     if sorted(traced_sample_ids) != expected_sample_ids:
         raise ValueError("trajectory traces do not cover each real sample ID exactly once")
-    if run["method"] == "pixel_remainder_taylor" and not dynamic_plan_seen:
-        raise ValueError("adaptive run never produced a nonzero dynamic segment plan")
+    if run["method"] == "pixel_remainder_taylor" and (
+        not dynamic_plan_seen or not dynamic_taylor_seen
+    ):
+        raise ValueError(
+            "adaptive run never executed a nonzero dynamic Taylor segment"
+        )
     print(json.dumps({
         **validation, "identity_validation": "passed",
         "trajectory_count": len(trace_rows), "forward_contract": "passed",

@@ -21,6 +21,14 @@ FIXED_VALUES = {
 
 
 def validate_method_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "mode", "tau", "max_taylor_span", "stored_feature_order",
+        "pixel_max_order", "warmup_full_nfe", "pool_kernel",
+        "batch_reduction", "cache_dtype", "trace_mode", "debug",
+    }
+    unknown = sorted(set(config) - allowed)
+    if unknown:
+        raise ValueError(f"unknown method keys: {unknown}")
     if "tai" in config:
         raise ValueError("unknown key 'tai'; set explicit numeric tau")
     mode = config.get("mode")

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from statistics import mean
 from typing import Callable, Hashable, Iterable
 
@@ -23,6 +24,13 @@ from .state import ModuleKey, PixelHistory, TaylorStreamState
 
 
 MODES = {"pixel_remainder_taylor", "instrumented_full", "fixed_schedule_parity"}
+
+
+def _cuda_tracking_enabled() -> bool:
+    return (
+        os.environ.get("CUDA_VISIBLE_DEVICES") not in {None, "", "-1"}
+        and torch.cuda.is_available()
+    )
 
 
 class PixelRemainderRuntime:
@@ -67,6 +75,11 @@ class PixelRemainderRuntime:
             )
         else:
             self.scheduler = DynamicSegmentScheduler(warmup_full_nfe=3)
+        self.predictor_backend = (
+            "legacy_recursive"
+            if mode == "fixed_schedule_parity"
+            else "nonuniform_polynomial"
+        )
         self.streams: dict[Hashable, TaylorStreamState] = {}
         self.pixel_history = PixelHistory()
         self.expected_streams: set[Hashable] = set()
@@ -115,8 +128,15 @@ class PixelRemainderRuntime:
             raise ValueError("at least one feature stream is required")
         self.reset(clear_last_summary=False)
         self.scheduler.reset(total_nfe)
+        if _cuda_tracking_enabled():
+            torch.cuda.reset_peak_memory_stats()
         self.expected_streams = streams
-        self.streams = {stream: TaylorStreamState(stream) for stream in streams}
+        self.streams = {
+            stream: TaylorStreamState(
+                stream, predictor_backend=self.predictor_backend
+            )
+            for stream in streams
+        }
         self.trajectory_id = trajectory_id
         self.sample_ids = [int(value) for value in sample_ids]
         self.active = True
@@ -153,6 +173,30 @@ class PixelRemainderRuntime:
         if stream_id not in self.expected_streams:
             raise RuntimeError(f"unexpected feature stream {stream_id!r}")
         return self.streams[stream_id]
+
+    def force_current_full(self, reason: str) -> DynamicDecision:
+        """Replace an unexecuted Taylor decision for inherited diagnostics."""
+
+        decision = self.current_decision
+        if decision is None or self.seen_streams:
+            raise RuntimeError("current NFE can be replaced only before streams execute")
+        if decision.action == FULL:
+            replacement = replace(decision, full_reason=str(reason))
+        else:
+            self.scheduler.taylor_count -= 1
+            self.scheduler.full_count += 1
+            self.scheduler.remaining_taylor_nfe = 0
+            if hasattr(self.scheduler, "_counter"):
+                self.scheduler._counter = 0
+            replacement = replace(
+                decision,
+                action=FULL,
+                full_reason=str(reason),
+                active_forecast_order=None,
+                remaining_taylor_after=0,
+            )
+        self.current_decision = replacement
+        return replacement
 
     def branch(
         self,
@@ -260,12 +304,16 @@ class PixelRemainderRuntime:
             ) * 1000.0
             started = time.perf_counter()
             plan = plan_segment(
-                self.pixel_history.factors,
+                self.pixel_history.anchor_values,
+                pixel_coordinates=self.pixel_history.anchor_coordinates,
                 feature_available_order_min=feature_order_min,
                 nfe_index=decision.nfe_index,
                 total_nfe=decision.total_nfe,
                 tau=float(self.tau),
                 max_taylor_span=self.max_taylor_span,
+                available_future_nfe=(
+                    decision.total_nfe - decision.nfe_index - 1
+                ),
             )
             self.controller_time_ms += (time.perf_counter() - started) * 1000.0
             self.scheduler.plan_next_segment(
@@ -305,7 +353,7 @@ class PixelRemainderRuntime:
 
     def tensor_count(self) -> int:
         return sum(
-            len(state.factors)
+            len(state.cached_tensors())
             for stream in self.streams.values()
             for state in stream.module_states.values()
         )
@@ -352,10 +400,14 @@ class PixelRemainderRuntime:
             "pixel_history_bytes": self.pixel_history.cache_bytes(),
             "cache_tensor_count": self.tensor_count(),
             "peak_memory_allocated": (
-                int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0
+                int(torch.cuda.max_memory_allocated()) if _cuda_tracking_enabled() else 0
             ),
             "peak_memory_reserved": (
-                int(torch.cuda.max_memory_reserved()) if torch.cuda.is_available() else 0
+                int(torch.cuda.max_memory_reserved()) if _cuda_tracking_enabled() else 0
+            ),
+            "component_timing_semantics": (
+                "cpu_wall_dispatch_including_explicit_scalar_synchronization; "
+                "official speed uses cumulative launcher wall clock"
             ),
             "nfe_trace": copy.deepcopy(self.nfe_trace),
         }

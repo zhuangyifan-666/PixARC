@@ -82,21 +82,18 @@ def _selected(source: str, row: dict[str, str], pareto: bool) -> bool:
 
 
 def normalize(source: str, rows: list[dict[str, str]]) -> list[dict[str, Any]]:
-    fid_frontier = _pareto(rows, "delta_fid")
-    lpips_frontier = _pareto(rows, "mean_lpips")
-    mse_frontier = _pareto(rows, "aggregate_mse")
     output = []
-    for index, row in enumerate(rows):
+    for row in rows:
         value: dict[str, Any] = {
             "model": row.get("model", ""),
             "source": source,
             "run": row.get("run", ""),
             "method": row.get("method", ""),
             "setting": _setting(source, row),
-            "comparison_selected": int(_selected(source, row, index in fid_frontier)),
-            "speed_fid_pareto": int(index in fid_frontier),
-            "speed_lpips_pareto": int(index in lpips_frontier),
-            "speed_mse_pareto": int(index in mse_frontier),
+            "comparison_selected": 0,
+            "speed_fid_pareto": 0,
+            "speed_lpips_pareto": 0,
+            "speed_mse_pareto": 0,
             "sample_count": row.get("sample_count", ""),
             "elapsed_seconds": row.get("elapsed_seconds", ""),
             "images_per_second": row.get("images_per_second", ""),
@@ -105,6 +102,30 @@ def normalize(source: str, rows: list[dict[str, str]]) -> list[dict[str, Any]]:
         value.update({metric: row.get(metric, "") for metric in METRICS})
         output.append(value)
     return output
+
+
+def mark_model_family_pareto(rows: list[dict[str, Any]]) -> None:
+    """Mark one cross-method frontier independently inside each model family."""
+
+    for model in sorted({str(row["model"]) for row in rows}):
+        indices = [index for index, row in enumerate(rows) if row["model"] == model]
+        model_rows = [rows[index] for index in indices]
+        frontiers = {
+            "speed_fid_pareto": _pareto(model_rows, "delta_fid"),
+            "speed_lpips_pareto": _pareto(model_rows, "mean_lpips"),
+            "speed_mse_pareto": _pareto(model_rows, "aggregate_mse"),
+        }
+        for local_index, global_index in enumerate(indices):
+            row = rows[global_index]
+            for field, frontier in frontiers.items():
+                row[field] = int(local_index in frontier)
+            row["comparison_selected"] = int(
+                _selected(
+                    str(row["source"]),
+                    row,
+                    bool(row["speed_fid_pareto"]),
+                )
+            )
 
 
 def _write_report(
@@ -187,7 +208,7 @@ def _write_report(
             overhead = ""
             if elapsed_row and elapsed_row.get("elapsed_seconds") not in {"", None}:
                 fraction = float(trace.get("controller_time_ms", 0.0)) / (float(elapsed_row["elapsed_seconds"]) * 1000.0)
-                overhead = f"; controller/wall-clock={fraction:.6f}"
+                overhead = f"; controller-dispatch/wall-clock={fraction:.6f}"
             lines.append(
                 f"- `{trace.get('run')}`: Full/Taylor={trace.get('full_ratio')}/{trace.get('taylor_ratio')}, "
                 f"order-1/order-2 Taylor={trace.get('order1_taylor_ratio')}/{trace.get('order2_taylor_ratio')}, "
@@ -232,6 +253,7 @@ def main() -> None:
         combined.extend(normalize(source, _read(root / name)))
     for name in args.prt_summary:
         combined.extend(normalize("Pixel-Remainder Taylor", _read(Path(name))))
+    mark_model_family_pareto(combined)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as handle:

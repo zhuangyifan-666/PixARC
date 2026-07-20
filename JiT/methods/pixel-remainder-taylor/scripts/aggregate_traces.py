@@ -60,6 +60,13 @@ def aggregate(rows: list[dict[str, Any]], *, model: str, run: str) -> dict[str, 
         raise ValueError("order-1 + order-2 Taylor counts do not equal taylor_nfe")
     if any(row.get("call_count_valid") is not True for row in rows):
         raise ValueError("at least one trajectory failed its NFE/forward contract")
+    sample_ids = [
+        int(sample_id)
+        for row in rows
+        for sample_id in row.get("sample_ids", [])
+    ]
+    if len(sample_ids) != len(set(sample_ids)):
+        raise ValueError("trajectory traces contain duplicate real sample IDs")
 
     plans: list[dict[str, Any]] = []
     decisions = Counter()
@@ -89,7 +96,7 @@ def aggregate(rows: list[dict[str, Any]], *, model: str, run: str) -> dict[str, 
         "tau": tau,
         "max_taylor_span": cap_int,
         "trajectory_count": len(rows),
-        "sample_count": sum(len(row.get("sample_ids", [])) for row in rows),
+        "sample_count": len(sample_ids),
         "total_nfe": total_nfe,
         "full_nfe": full_nfe,
         "taylor_nfe": taylor_nfe,

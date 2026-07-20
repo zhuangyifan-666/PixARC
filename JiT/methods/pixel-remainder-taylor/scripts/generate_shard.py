@@ -21,12 +21,17 @@ METHOD_ROOT = Path(__file__).resolve().parents[1]
 JIT_ROOT = Path(__file__).resolve().parents[3]
 PIXARC_ROOT = Path(__file__).resolve().parents[4]
 BASELINE_ROOT = JIT_ROOT / "baselines" / "taylorseer-style"
-for item in (METHOD_ROOT, BASELINE_ROOT):
+UPSTREAM_ROOT = PIXARC_ROOT / "third-party" / "JiT"
+for item in (UPSTREAM_ROOT, METHOD_ROOT, BASELINE_ROOT):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
 from pixel_remainder_taylor.config import load_config  # noqa: E402
 from pixel_remainder_taylor.jit_denoiser import PixelRemainderTaylorDenoiser  # noqa: E402
+from pixel_remainder_taylor.protocol import (  # noqa: E402
+    executable_tree_sha256,
+    validate_compatible_manifest_sidecar,
+)
 from taylorseer_style.image_io import (  # noqa: E402
     atomic_write_png,
     image_path,
@@ -44,11 +49,16 @@ from taylorseer_style.manifest import (  # noqa: E402
 from taylorseer_style.metadata import (  # noqa: E402
     atomic_create_json,
     atomic_write_json,
+    build_run_metadata,
     canonical_hash,
     checkpoint_identity,
     git_revision,
     load_json,
+    source_tree_sha256,
 )
+
+
+TAYLORSEER_COMMIT = "704ee98c74f7f04da443daa3c0aa2cc7803d86e3"
 
 
 def _args(config: dict[str, object]) -> SimpleNamespace:
@@ -156,6 +166,19 @@ def main() -> None:
     config = load_config(config_path)
     runtime = dict(config["runtime"]); method = dict(config["method"])
     sampling = dict(config["sampling"]); model_config = dict(config["model"])
+    debug = dict(method.get("debug", {}))
+    fixed_parity = method["mode"] == "fixed_schedule_parity"
+    identity_interval = (
+        int(debug["interval"])
+        if fixed_parity
+        else int(method["max_taylor_span"]) + 1
+    )
+    identity_max_order = int(debug["order"]) if fixed_parity else 2
+    coordinate_mode = (
+        "pixel_remainder_legacy_parity_v1"
+        if fixed_parity
+        else "pixel_remainder_nonuniform_v1"
+    )
     if sampling.get("method") != "heun" or sampling.get("exact_heun") is not True:
         raise ValueError("official runs require exact 50-step Heun")
     if int(sampling.get("steps", 0)) != 50:
@@ -166,9 +189,9 @@ def main() -> None:
     records = load_manifest(args.manifest)
     batch_size = int(runtime["batch_size"]); resolution = int(model_config.get("image_size", 256))
     validate_manifest(records, world_size=args.world_size, batch_size=batch_size)
-    sidecar = Path(args.manifest).with_suffix(Path(args.manifest).suffix + ".meta.json")
-    validate_manifest_sidecar(
+    sidecar, _sidecar_metadata = validate_compatible_manifest_sidecar(
         args.manifest, records, world_size=args.world_size, batch_size=batch_size,
+        validator=validate_manifest_sidecar,
         generator_device="cuda", noise_dtype="float32", noise_shape=(3, resolution, resolution),
     )
     output = Path(args.output_root).resolve(); _assert_external(output)
@@ -194,28 +217,93 @@ def main() -> None:
         records, args.shard_id, output / "samples", prior,
         manifest_sha256=manifest_hash, config_hash=config_hash,
         checkpoint_path=str(checkpoint), checkpoint_size=int(identity["checkpoint_size"]),
-        method=str(method["mode"]), interval=int(method["max_taylor_span"]) + 1,
-        max_order=2, coordinate_mode="pixel_remainder_dynamic_v1", resolution=resolution,
+        method=str(method["mode"]), interval=identity_interval,
+        max_order=identity_max_order, coordinate_mode=coordinate_mode, resolution=resolution,
     )
-    manifest_value = {
-        "schema_version": config["schema_version"], "model": model_config["variant"],
-        "method": method["mode"], "tau": method.get("tau"),
-        "max_taylor_span": method["max_taylor_span"], "config_hash": config_hash,
-        "manifest_sha256": manifest_hash, "manifest_records_sha256": manifest_records_sha256(records),
-        "checkpoint_path": str(checkpoint), "checkpoint_size": int(identity["checkpoint_size"]),
-        "git_commit": git_revision(PIXARC_ROOT), "world_size": args.world_size,
-        "batch_size": batch_size, "expected_nfe_per_trajectory": 99,
+    run_config = {
+        "model": model_config["variant"],
+        "model_config_hash": canonical_hash(
+            {**model_config, "checkpoint": str(checkpoint)}
+        ),
+        "ema": "EMA1",
+        "input_config_hash": config_hash,
+        "port_source_sha256": source_tree_sha256(BASELINE_ROOT),
+        "method_source_sha256": executable_tree_sha256(METHOD_ROOT),
+        "manifest_sha256": manifest_hash,
+        "manifest_sidecar_sha256": sha256_file(sidecar),
+        "manifest_records_sha256": manifest_records_sha256(records),
+        "initial_noise_protocol": "per-sample torch.Generator(device='cuda') standard Gaussian; JiT noise_scale applied by config",
+        "rng_device": "cuda",
+        "generator_type": "torch.Generator.manual_seed per sample",
+        "initial_noise_dtype": "float32",
+        "initial_noise_shape": [3, resolution, resolution],
+        "noise_scale": float(sampling.get("noise_scale", 1.0)),
+        "sampler": str(sampling["method"]),
+        "sampler_config_hash": canonical_hash(sampling),
+        "steps": int(sampling["steps"]),
+        "cfg_scale": float(sampling["cfg_scale"]),
+        "guidance_interval": list(sampling["guidance_interval"]),
+        "timeshift": None,
+        "dtype": str(sampling["dtype"]),
+        "resolution": resolution,
+        "image_postprocessing": "(x+1)/2; clip; round(x*255); RGB uint8 PNG",
+        "world_size": args.world_size,
+        "batch_size": batch_size,
+        "batch_grouping": "manifest batch_group_id/position_in_batch",
+        "compile_mode": runtime.get("compile_mode", "matched_eager"),
+        "coordinate_mode": coordinate_mode,
+    }
+    manifest_value = build_run_metadata(
+        model=model_config["variant"],
+        method=str(method["mode"]),
+        config=run_config,
+        checkpoint=checkpoint,
+        manifest_sha256=manifest_hash,
+        git_commit=git_revision(PIXARC_ROOT),
+        taylorseer_commit=TAYLORSEER_COMMIT,
+    )
+    manifest_value.update({
+        "method_schema_version": config["schema_version"],
+        "input_config_hash": config_hash,
+        "method_source_sha256": run_config["method_source_sha256"],
+        "tau": method.get("tau"),
+        "max_taylor_span": method["max_taylor_span"],
+        "expected_nfe_per_trajectory": 99,
         "expected_network_forwards_per_trajectory": 198,
         "forward_contract": "two separate B-sized CFG forwards per NFE",
-    }
+        "identity_interval": identity_interval,
+        "identity_max_order": identity_max_order,
+        "coordinate_mode": coordinate_mode,
+    })
     run_manifest = output / "run_manifest.json"
     if not run_manifest.exists():
         atomic_create_json(run_manifest, manifest_value)
-    if load_json(run_manifest) != manifest_value:
-        raise RuntimeError("existing run_manifest does not match this invocation")
+    existing_run = load_json(run_manifest)
+    for key in (
+        "config", "input_config_hash", "manifest_sha256",
+        "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
+        "method", "tau", "max_taylor_span", "git_commit",
+        "pytorch_version", "method_source_sha256",
+    ):
+        if existing_run.get(key) != manifest_value.get(key):
+            raise RuntimeError(f"existing run_manifest mismatch: {key}")
+
+    if not groups:
+        result = {
+            "generated": len(prior),
+            "generated_this_invocation": 0,
+            "skipped_groups": len(skipped),
+            "shard_id": args.shard_id,
+            "tau": method.get("tau"),
+            "max_taylor_span": method["max_taylor_span"],
+        }
+        summary_path = output / "summaries" / f"rank_{args.shard_id}_summary.json"
+        if not summary_path.exists():
+            atomic_write_json(summary_path, result)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
 
     denoiser_args = _args(config)
-    debug = dict(method.get("debug", {}))
     model = PixelRemainderTaylorDenoiser(
         denoiser_args, mode=str(method["mode"]), tau=method.get("tau"),
         max_taylor_span=int(method["max_taylor_span"]),
@@ -272,8 +360,8 @@ def main() -> None:
                     "batch_group_id": row.batch_group_id, "position_in_batch": row.position_in_batch,
                     "manifest_sha256": manifest_hash, "config_hash": config_hash,
                     "checkpoint_path": str(checkpoint), "checkpoint_size": int(identity["checkpoint_size"]),
-                    "method": method["mode"], "interval": int(method["max_taylor_span"]) + 1,
-                    "max_order": 2, "coordinate_mode": "pixel_remainder_dynamic_v1",
+                    "method": method["mode"], "interval": identity_interval,
+                    "max_order": identity_max_order, "coordinate_mode": coordinate_mode,
                     "tau": method.get("tau"), "max_taylor_span": method["max_taylor_span"],
                     **{f"trajectory_{key}": value for key, value in trajectory.items()}, "status": "ok",
                 })

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 
-def _merge(patterns: list[str], output: Path) -> int:
+def _merge(patterns: list[str], output: Path) -> tuple[int, set[tuple[str, str]]]:
     names: list[str] = []
     for pattern in patterns:
         matched = sorted(glob.glob(pattern))
@@ -34,7 +34,7 @@ def _merge(patterns: list[str], output: Path) -> int:
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader(); writer.writerows(rows)
-    return len(rows)
+    return len(rows), identities
 
 
 def main() -> None:
@@ -46,10 +46,12 @@ def main() -> None:
     root = Path(args.results_root)
     summary = root / "pixel_remainder_taylor_1k_summary.csv"
     trace = root / "pixel_remainder_taylor_1k_trace.csv"
-    summary_count = _merge(args.summary, summary)
-    trace_count = _merge(args.trace, trace)
+    summary_count, summary_identities = _merge(args.summary, summary)
+    trace_count, trace_identities = _merge(args.trace, trace)
     if summary_count != trace_count:
         raise ValueError("summary and trace row counts differ")
+    if summary_identities != trace_identities:
+        raise ValueError("summary and trace model/run identities differ")
     comparison = Path(__file__).with_name("build_comparison.py")
     subprocess.run([
         sys.executable, str(comparison), "--results-root", str(root),

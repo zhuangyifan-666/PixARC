@@ -18,7 +18,7 @@ while (($#)); do
   esac
 done
 [[ "$MODEL" == "JiT" || "$MODEL" == "PixelGen" ]] || { usage; exit 2; }
-[[ -f "$CONFIG" && -f "$MANIFEST" && -f "${MANIFEST}.meta.json" ]] || { usage; exit 2; }
+[[ -f "$CONFIG" && -f "$MANIFEST" ]] || { usage; exit 2; }
 [[ "$EXPECTED_COUNT" =~ ^[1-9][0-9]*$ ]] || { usage; exit 2; }
 [[ "${PIXEL_REMAINDER_GPU_RUN_ALLOWED:-0}" == "1" ]] || {
   echo "Refusing GPU work: set PIXEL_REMAINDER_GPU_RUN_ALLOWED=1 after allocating idle GPUs." >&2
@@ -39,13 +39,16 @@ done
 
 SCRIPT_ROOT="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 PIXARC_ROOT="$(cd -- "$SCRIPT_ROOT/../../../.." && pwd -P)"
+PYTHON_BIN="${PIXEL_REMAINDER_PYTHON:-python}"
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "Python executable not found: $PYTHON_BIN" >&2; exit 4; }
 if [[ "$MODEL" == "JiT" ]]; then
   GENERATOR="$SCRIPT_ROOT/generate_shard.py"
 else
   GENERATOR="$PIXARC_ROOT/PixelGen/methods/pixel-remainder-taylor/scripts/generate_shard.py"
 fi
 VALIDATOR="$SCRIPT_ROOT/validate_outputs.py"
-[[ -f "$GENERATOR" && -f "$VALIDATOR" ]] || { echo "Required generator/validator is missing." >&2; exit 4; }
+TIMING_SCRIPT="$SCRIPT_ROOT/launcher_timing.py"
+[[ -f "$GENERATOR" && -f "$VALIDATOR" && -f "$TIMING_SCRIPT" ]] || { echo "Required generator/validator/timing script is missing." >&2; exit 4; }
 
 if [[ -e "$OUTPUT_ROOT" && -n "$(find "$OUTPUT_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" && $RESUME -eq 0 ]]; then
   echo "Refusing a non-empty output root without --resume: $OUTPUT_ROOT" >&2
@@ -60,6 +63,7 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 CONFIG="$(cd -- "$(dirname -- "$CONFIG")" && pwd -P)/$(basename -- "$CONFIG")"
 MANIFEST="$(cd -- "$(dirname -- "$MANIFEST")" && pwd -P)/$(basename -- "$MANIFEST")"
 CONFIG_ORIGIN="$(dirname -- "$CONFIG")"
+BASELINE_COUNT="$("$PYTHON_BIN" "$TIMING_SCRIPT" count --output-root "$OUTPUT_ROOT" --world-size 4)"
 START_NS="$(date +%s%N)"
 INVOCATION="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 PIDS=()
@@ -68,7 +72,7 @@ for RANK in 0 1 2 3; do
   [[ $RESUME -eq 0 ]] || EXTRA+=(--resume)
   CUDA_VISIBLE_DEVICES="${GPU_IDS[$RANK]}" \
   PIXEL_REMAINDER_INVOCATION_ID="$INVOCATION" \
-  python "$GENERATOR" \
+  "$PYTHON_BIN" "$GENERATOR" \
     --config "$CONFIG" --config-origin-dir "$CONFIG_ORIGIN" \
     --manifest "$MANIFEST" --shard-id "$RANK" --world-size 4 \
     --output-root "$OUTPUT_ROOT" --acknowledge-gpu-job "${EXTRA[@]}" \
@@ -79,12 +83,16 @@ STATUS=0
 for PID in "${PIDS[@]}"; do
   wait "$PID" || STATUS=1
 done
-[[ $STATUS -eq 0 ]] || { echo "At least one rank failed; inspect $OUTPUT_ROOT/logs" >&2; exit 5; }
 END_NS="$(date +%s%N)"
-ELAPSED="$(python -c 'import sys; print((int(sys.argv[2])-int(sys.argv[1]))/1e9)' "$START_NS" "$END_NS")"
-python "$VALIDATOR" \
-  --run-root "$OUTPUT_ROOT" --manifest "$MANIFEST" \
-  --expected-count "$EXPECTED_COUNT" --resolution 256
-python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(json.dumps({"elapsed_seconds":float(sys.argv[2]),"invocation_id":sys.argv[3]},indent=2)+"\n")' \
-  "$OUTPUT_ROOT/launcher_timing.json" "$ELAPSED" "$INVOCATION"
-echo "Completed $MODEL: $EXPECTED_COUNT samples in $ELAPSED seconds"
+if [[ $STATUS -eq 0 ]]; then
+  "$PYTHON_BIN" "$VALIDATOR" \
+    --run-root "$OUTPUT_ROOT" --manifest "$MANIFEST" \
+    --expected-count "$EXPECTED_COUNT" --resolution 256 || STATUS=1
+fi
+"$PYTHON_BIN" "$TIMING_SCRIPT" record \
+  --output-root "$OUTPUT_ROOT" --manifest "$MANIFEST" \
+  --invocation-id "$INVOCATION" --start-ns "$START_NS" --end-ns "$END_NS" \
+  --launcher-status "$STATUS" --baseline-count "$BASELINE_COUNT" --world-size 4
+[[ $STATUS -eq 0 ]] || { echo "Launcher or validation failed; inspect $OUTPUT_ROOT/logs" >&2; exit 5; }
+ELAPSED="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["cumulative_elapsed_seconds"])' "$OUTPUT_ROOT/launcher_timing.json")"
+echo "Completed $MODEL: $EXPECTED_COUNT samples in cumulative $ELAPSED seconds"

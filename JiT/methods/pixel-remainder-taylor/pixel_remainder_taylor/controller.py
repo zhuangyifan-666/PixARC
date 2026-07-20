@@ -9,6 +9,11 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from .finite_difference import (
+    UnsafeInterpolationError,
+    nonuniform_polynomial_forecast,
+)
+
 
 EPS = 1e-6
 POOL_KERNEL = 8
@@ -76,11 +81,13 @@ class SegmentPlan:
 def plan_segment(
     pixel_factors: list[torch.Tensor],
     *,
+    pixel_coordinates: list[int | float] | None = None,
     feature_available_order_min: int,
     nfe_index: int,
     total_nfe: int,
     tau: float,
     max_taylor_span: int,
+    available_future_nfe: int | None = None,
     pool_kernel: int = POOL_KERNEL,
     eps: float = EPS,
 ) -> SegmentPlan:
@@ -96,12 +103,45 @@ def plan_segment(
         or max_taylor_span < 1
     ):
         raise ValueError("max_taylor_span must be an integer >= 1")
+    if available_future_nfe is not None and (
+        isinstance(available_future_nfe, bool)
+        or not isinstance(available_future_nfe, int)
+        or available_future_nfe < 0
+    ):
+        raise ValueError("available_future_nfe must be an integer >= 0")
+    horizon_limit = max_taylor_span
+    if available_future_nfe is not None:
+        horizon_limit = min(horizon_limit, available_future_nfe)
     progress = 0.0 if total_nfe == 1 else nfe_index / (total_nfe - 1)
     progress = min(1.0, max(0.0, float(progress)))
+    if pixel_coordinates is not None and len(pixel_coordinates) != len(pixel_factors):
+        raise ValueError("pixel coordinates/values length mismatch")
     low_norms: list[float] = []
     high_norms: list[float] = []
     nonfinite = False
-    for factor in pixel_factors:
+    diagnostic_terms = list(pixel_factors)
+    if pixel_coordinates is not None and pixel_factors:
+        diagnostic_terms = [pixel_factors[-1]]
+        diagnostic_target = float(pixel_coordinates[-1]) - 1.0
+        for order in range(1, len(pixel_factors)):
+            try:
+                current = nonuniform_polynomial_forecast(
+                    pixel_coordinates,
+                    pixel_factors,
+                    coordinate=diagnostic_target,
+                    order_override=order,
+                )
+                previous = nonuniform_polynomial_forecast(
+                    pixel_coordinates,
+                    pixel_factors,
+                    coordinate=diagnostic_target,
+                    order_override=order - 1,
+                )
+            except (ValueError, UnsafeInterpolationError):
+                nonfinite = True
+                break
+            diagnostic_terms.append(current - previous)
+    for factor in diagnostic_terms:
         low, high = _band_norms(factor.float(), pool_kernel)
         low_mean = float(low.mean())
         high_mean = float(high.mean())
@@ -116,21 +156,45 @@ def plan_segment(
     if not pixel_factors or nonfinite:
         return SegmentPlan(None, 0, safe_h, risks, maxima, progress, low_norms, high_norms, True)
 
-    base_low, base_high = _band_norms(pixel_factors[0].float(), pool_kernel)
+    base_value = pixel_factors[-1] if pixel_coordinates is not None else pixel_factors[0]
+    base_low, base_high = _band_norms(base_value.float(), pool_kernel)
     for order in ORDER_CANDIDATES:
         if len(pixel_factors) <= order + 1:
             continue
         if feature_available_order_min < order:
             continue
-        omitted_low, omitted_high = _band_norms(
-            pixel_factors[order + 1].float(), pool_kernel
-        )
         order_risk: dict[int, float] = {}
         order_max: dict[int, float] = {}
-        for horizon in range(1, max_taylor_span + 1):
-            scale = abs(horizon) ** (order + 1) / math.factorial(order + 1)
-            relative_low = scale * omitted_low / (base_low + eps)
-            relative_high = scale * omitted_high / (base_high + eps)
+        for horizon in range(1, horizon_limit + 1):
+            if pixel_coordinates is None:
+                omitted = pixel_factors[order + 1].float()
+                scale = abs(horizon) ** (order + 1) / math.factorial(order + 1)
+                omitted_low, omitted_high = _band_norms(omitted, pool_kernel)
+                relative_low = scale * omitted_low / (base_low + eps)
+                relative_high = scale * omitted_high / (base_high + eps)
+            else:
+                target = float(pixel_coordinates[-1]) - float(horizon)
+                try:
+                    protected = nonuniform_polynomial_forecast(
+                        pixel_coordinates,
+                        pixel_factors,
+                        coordinate=target,
+                        order_override=order + 1,
+                    )
+                    selected = nonuniform_polynomial_forecast(
+                        pixel_coordinates,
+                        pixel_factors,
+                        coordinate=target,
+                        order_override=order,
+                    )
+                except (ValueError, UnsafeInterpolationError):
+                    nonfinite = True
+                    continue
+                omitted_low, omitted_high = _band_norms(
+                    (protected - selected).float(), pool_kernel
+                )
+                relative_low = omitted_low / (base_low + eps)
+                relative_high = omitted_high / (base_high + eps)
             per_image = torch.maximum(relative_low, progress * relative_high)
             mean_value = float(per_image.mean())
             max_value = float(per_image.max())

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import math
 import sys
@@ -21,13 +22,22 @@ for item in (METHOD_ROOT, BASELINE_ROOT):
         sys.path.insert(0, str(item))
 
 from aggregate_traces import _read_jsonl, aggregate  # noqa: E402
+from pixel_remainder_taylor.protocol import resolve_manifest_sidecar  # noqa: E402
 from taylorseer_style.distribution_metrics import (  # noqa: E402
     build_adm_sample_npz,
     run_adm_evaluator,
 )
 from taylorseer_style.image_io import image_path  # noqa: E402
-from taylorseer_style.manifest import load_manifest, validate_manifest  # noqa: E402
-from taylorseer_style.metadata import atomic_write_json, load_json  # noqa: E402
+from taylorseer_style.manifest import (  # noqa: E402
+    load_manifest,
+    sha256_file,
+    validate_manifest,
+)
+from taylorseer_style.metadata import (  # noqa: E402
+    PAIRING_FIELDS,
+    atomic_write_json,
+    load_json,
+)
 from taylorseer_style.paired_metrics import (  # noqa: E402
     _lpips_values,
     _summary,
@@ -40,6 +50,9 @@ from taylorseer_style.paired_metrics import (  # noqa: E402
 
 
 QUALITY_KEYS = ("fid", "sfid", "inception_score", "precision", "recall")
+PAIRING_PROTOCOL_FIELDS = tuple(
+    field for field in PAIRING_FIELDS if field != "git_commit"
+)
 
 
 def _baseline_row(path: Path, model: str) -> dict[str, str]:
@@ -55,6 +68,39 @@ def _write_one(path: Path, row: dict[str, object]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(row))
         writer.writeheader(); writer.writerow(row)
+
+
+def _candidate_trace_files(patterns: list[str], trace_root: Path) -> list[str]:
+    files: list[Path] = []
+    for pattern in patterns:
+        matches = [Path(value).resolve(strict=True) for value in sorted(glob.glob(pattern))]
+        if not matches:
+            raise FileNotFoundError(f"trace pattern matched nothing: {pattern}")
+        files.extend(matches)
+    for path in files:
+        if trace_root not in path.parents:
+            raise ValueError(f"trace is outside candidate trace root: {path}")
+    if len(files) != len(set(files)):
+        raise ValueError("duplicate trace files were supplied")
+    return [str(path) for path in files]
+
+
+def validate_pairing_protocol(
+    candidate: dict[str, object], reference: dict[str, object]
+) -> None:
+    pairing_errors = []
+    for field in PAIRING_PROTOCOL_FIELDS:
+        if field not in candidate or field not in reference:
+            pairing_errors.append(f"missing required pairing field {field!r}")
+        elif candidate[field] != reference[field]:
+            pairing_errors.append(
+                f"{field}: candidate={candidate[field]!r}, reference={reference[field]!r}"
+            )
+    if pairing_errors:
+        raise ValueError(
+            "candidate/reference protocol mismatch:\n- "
+            + "\n- ".join(pairing_errors)
+        )
 
 
 def _paired(
@@ -134,7 +180,8 @@ def main() -> None:
     parser.add_argument("--reference-manifest", required=True)
     parser.add_argument("--reference-npz", required=True)
     parser.add_argument("--evaluator", required=True)
-    parser.add_argument("--elapsed-seconds", required=True, type=float)
+    parser.add_argument("--elapsed-seconds", type=float)
+    parser.add_argument("--timing")
     parser.add_argument("--baseline-summary", default="results/taylorseer_1k_summary.csv")
     parser.add_argument("--trace", action="append", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -155,14 +202,32 @@ def main() -> None:
         raise ValueError("candidate run is not pixel_remainder_taylor")
     if reference_run.get("method") not in {"upstream_full", "instrumented_full"}:
         raise ValueError("reference root is not an existing matched Full run")
-    for field in ("model", "checkpoint_size", "manifest_records_sha256"):
-        if run.get(field) != reference_run.get(field):
-            raise ValueError(f"candidate/reference mismatch for {field}")
+    validate_pairing_protocol(run, reference_run)
+    expected_model_identity = {"JiT": "JiT-B/16", "PixelGen": "PixelGen-JiT"}
+    if run.get("model") != expected_model_identity[args.model]:
+        raise ValueError("--model does not match candidate run identity")
+    if run.get("manifest_sha256") != sha256_file(manifest_path):
+        raise ValueError("candidate run is not bound to --manifest")
+    if reference_run.get("manifest_sha256") != sha256_file(reference_manifest_path):
+        raise ValueError("reference run is not bound to --reference-manifest")
+    if run.get("manifest_sidecar_sha256") != sha256_file(
+        resolve_manifest_sidecar(manifest_path)
+    ):
+        raise ValueError("candidate manifest sidecar identity mismatch")
+    if reference_run.get("manifest_sidecar_sha256") != sha256_file(
+        resolve_manifest_sidecar(reference_manifest_path)
+    ):
+        raise ValueError("reference manifest sidecar identity mismatch")
     if run.get("manifest_sha256") is None or int(run.get("expected_nfe_per_trajectory", 0)) != 99:
         raise ValueError("candidate run identity or NFE contract is incomplete")
-    trace = aggregate(_read_jsonl(args.trace), model=args.model, run=args.run)
+    trace_files = _candidate_trace_files(
+        args.trace, (candidate_root / "traces").resolve(strict=True)
+    )
+    trace = aggregate(_read_jsonl(trace_files), model=args.model, run=args.run)
     if trace["sample_count"] != 1000:
         raise ValueError(f"trace covers {trace['sample_count']} samples, expected 1000")
+    if trace.get("tau") != run.get("tau") or trace.get("max_taylor_span") != run.get("max_taylor_span"):
+        raise ValueError("trace settings do not match candidate run manifest")
 
     paired, pair_rows = _paired(
         reference_root / "samples", candidate_root / "samples",
@@ -181,7 +246,34 @@ def main() -> None:
     )
     (output / f"{args.model.lower()}_{args.run}_adm_stdout.txt").write_text(raw_output, encoding="utf-8")
     baseline = _baseline_row(Path(args.baseline_summary), args.model)
-    elapsed = float(args.elapsed_seconds)
+    reference_timing = load_json(reference_root / "four_gpu_wall_clock.json")
+    if reference_timing.get("completed") is not True:
+        raise ValueError("reference Full timing is not complete")
+    if not math.isclose(
+        float(reference_timing["elapsed_seconds"]),
+        float(baseline["elapsed_seconds"]),
+        rel_tol=0.0,
+        abs_tol=1e-6,
+    ):
+        raise ValueError("reference Full timing does not match frozen summary CSV")
+    timing_path = (
+        Path(args.timing).resolve(strict=True)
+        if args.timing
+        else candidate_root / "launcher_timing.json"
+    )
+    timing = load_json(timing_path)
+    if (
+        timing.get("completed") is not True
+        or timing.get("timing_provenance_complete") is not True
+        or int(timing.get("cumulative_sample_count", -1)) != 1000
+        or timing.get("manifest_sha256") != run.get("manifest_sha256")
+    ):
+        raise ValueError("candidate cumulative launcher timing is incomplete or unbound")
+    elapsed = float(timing["cumulative_elapsed_seconds"])
+    if args.elapsed_seconds is not None and not math.isclose(
+        float(args.elapsed_seconds), elapsed, rel_tol=0.0, abs_tol=1e-6
+    ):
+        raise ValueError("--elapsed-seconds differs from bound cumulative timing")
     if not math.isfinite(elapsed) or elapsed <= 0:
         raise ValueError("elapsed-seconds must be finite and positive")
     row: dict[str, object] = {
@@ -190,6 +282,9 @@ def main() -> None:
         "sample_count": 1000, "elapsed_seconds": elapsed,
         "images_per_second": 1000.0 / elapsed,
         "speedup_vs_full": float(baseline["elapsed_seconds"]) / elapsed,
+        "launcher_invocation_count": timing["invocation_count"],
+        "reference_npz_sha256": sha256_file(args.reference_npz),
+        "evaluator_sha256": sha256_file(args.evaluator),
     }
     for key in QUALITY_KEYS:
         row[key] = distribution[key]

@@ -7,7 +7,11 @@ from typing import Hashable
 
 import torch
 
-from .finite_difference import taylor_forecast, update_factors
+from .finite_difference import (
+    nonuniform_polynomial_forecast,
+    taylor_forecast,
+    update_factors,
+)
 
 
 ModuleKey = tuple[int, str]
@@ -15,12 +19,22 @@ ModuleKey = tuple[int, str]
 
 @dataclass
 class ModuleTaylorState:
+    predictor_backend: str = "nonuniform_polynomial"
     factors: list[torch.Tensor] = field(default_factory=list)
+    anchor_coordinates: list[int | float] = field(default_factory=list)
+    anchor_values: list[torch.Tensor] = field(default_factory=list)
     latest_exact_coordinate: int | float | None = None
     exact_update_count: int = 0
     tensor_shape: tuple[int, ...] | None = None
     dtype: torch.dtype | None = None
     device: torch.device | None = None
+
+    def __post_init__(self) -> None:
+        if self.predictor_backend not in {
+            "nonuniform_polynomial",
+            "legacy_recursive",
+        }:
+            raise ValueError("unsupported predictor backend")
 
     def _validate(self, value: torch.Tensor) -> None:
         signature = (tuple(value.shape), value.dtype, value.device)
@@ -41,14 +55,25 @@ class ModuleTaylorState:
         cache_dtype: str,
     ) -> None:
         self._validate(value)
-        self.factors = update_factors(
-            self.factors,
-            value,
-            coordinate=coordinate,
-            previous_coordinate=self.latest_exact_coordinate,
-            max_order=max_order,
-            cache_dtype=cache_dtype,
-        )
+        cached = value.detach().clone()
+        if cache_dtype == "fp32":
+            cached = cached.float()
+        if self.predictor_backend == "nonuniform_polynomial":
+            if coordinate in self.anchor_coordinates:
+                raise ValueError("duplicate exact-anchor coordinate")
+            self.anchor_coordinates.append(coordinate)
+            self.anchor_values.append(cached)
+            del self.anchor_coordinates[: -(max_order + 1)]
+            del self.anchor_values[: -(max_order + 1)]
+        else:
+            self.factors = update_factors(
+                self.factors,
+                cached,
+                coordinate=coordinate,
+                previous_coordinate=self.latest_exact_coordinate,
+                max_order=max_order,
+                cache_dtype="inherit",
+            )
         self.latest_exact_coordinate = coordinate
         self.exact_update_count += 1
 
@@ -57,14 +82,23 @@ class ModuleTaylorState:
     ) -> torch.Tensor:
         if self.latest_exact_coordinate is None:
             raise RuntimeError("forecast requested before an exact anchor")
-        pointers = tuple(factor.data_ptr() for factor in self.factors)
-        result = taylor_forecast(
-            self.factors,
-            coordinate=coordinate,
-            anchor_coordinate=self.latest_exact_coordinate,
-            order_override=order_override,
-        )
-        if pointers != tuple(factor.data_ptr() for factor in self.factors):
+        cached = self.cached_tensors()
+        pointers = tuple(value.data_ptr() for value in cached)
+        if self.predictor_backend == "nonuniform_polynomial":
+            result = nonuniform_polynomial_forecast(
+                self.anchor_coordinates,
+                self.anchor_values,
+                coordinate=coordinate,
+                order_override=order_override,
+            )
+        else:
+            result = taylor_forecast(
+                self.factors,
+                coordinate=coordinate,
+                anchor_coordinate=self.latest_exact_coordinate,
+                order_override=order_override,
+            )
+        if pointers != tuple(value.data_ptr() for value in self.cached_tensors()):
             raise AssertionError("forecast mutated feature history")
         if self.dtype is not None and result.dtype != self.dtype:
             result = result.to(dtype=self.dtype)
@@ -72,12 +106,18 @@ class ModuleTaylorState:
 
     @property
     def available_order(self) -> int:
-        return len(self.factors) - 1
+        return len(self.cached_tensors()) - 1
+
+    def cached_tensors(self) -> tuple[torch.Tensor, ...]:
+        if self.predictor_backend == "nonuniform_polynomial":
+            return tuple(self.anchor_values)
+        return tuple(self.factors)
 
 
 @dataclass
 class TaylorStreamState:
     stream_id: Hashable
+    predictor_backend: str = "nonuniform_polynomial"
     module_states: dict[ModuleKey, ModuleTaylorState] = field(default_factory=dict)
     full_count: int = 0
     taylor_count: int = 0
@@ -86,13 +126,15 @@ class TaylorStreamState:
         if key not in self.module_states:
             if not create:
                 raise KeyError(f"missing Taylor feature history {key!r}")
-            self.module_states[key] = ModuleTaylorState()
+            self.module_states[key] = ModuleTaylorState(
+                predictor_backend=self.predictor_backend
+            )
         return self.module_states[key]
 
     def cache_bytes(self) -> int:
         storages: dict[tuple[str, int], int] = {}
         for state in self.module_states.values():
-            for tensor in state.factors:
+            for tensor in state.cached_tensors():
                 storage = tensor.untyped_storage()
                 storages[(str(tensor.device), storage.data_ptr())] = storage.nbytes()
         return sum(storages.values())
@@ -107,7 +149,8 @@ class TaylorStreamState:
 class PixelHistory:
     """One guided real-batch FP32 exact-only history."""
 
-    factors: list[torch.Tensor] = field(default_factory=list)
+    anchor_coordinates: list[int | float] = field(default_factory=list)
+    anchor_values: list[torch.Tensor] = field(default_factory=list)
     latest_exact_coordinate: int | float | None = None
     exact_update_count: int = 0
     tensor_shape: tuple[int, ...] | None = None
@@ -124,26 +167,39 @@ class PixelHistory:
             raise RuntimeError(
                 f"pixel history shape changed: {self.tensor_shape} -> {shape}"
             )
-        self.factors = update_factors(
-            self.factors,
-            value.detach().float(),
-            coordinate=coordinate,
-            previous_coordinate=self.latest_exact_coordinate,
-            max_order=max_order,
-            cache_dtype="fp32",
-        )
+        if coordinate in self.anchor_coordinates:
+            raise ValueError("duplicate exact-anchor coordinate")
+        self.anchor_coordinates.append(coordinate)
+        self.anchor_values.append(value.detach().float().clone())
+        del self.anchor_coordinates[: -(max_order + 1)]
+        del self.anchor_values[: -(max_order + 1)]
         self.latest_exact_coordinate = coordinate
         self.exact_update_count += 1
 
+    def forecast(
+        self, coordinate: int | float, *, order_override: int
+    ) -> torch.Tensor:
+        if self.latest_exact_coordinate is None:
+            raise RuntimeError("forecast requested before an exact pixel anchor")
+        return nonuniform_polynomial_forecast(
+            self.anchor_coordinates,
+            self.anchor_values,
+            coordinate=coordinate,
+            order_override=order_override,
+        )
+
     @property
     def available_order(self) -> int:
-        return len(self.factors) - 1
+        return len(self.anchor_values) - 1
 
     def cache_bytes(self) -> int:
-        return sum(tensor.untyped_storage().nbytes() for tensor in self.factors)
+        return sum(
+            tensor.untyped_storage().nbytes() for tensor in self.anchor_values
+        )
 
     def reset(self) -> None:
-        self.factors.clear()
+        self.anchor_coordinates.clear()
+        self.anchor_values.clear()
         self.latest_exact_coordinate = None
         self.exact_update_count = 0
         self.tensor_shape = None

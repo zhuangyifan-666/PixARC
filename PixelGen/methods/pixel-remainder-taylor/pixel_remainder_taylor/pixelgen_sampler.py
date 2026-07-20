@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import numbers
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,7 +22,12 @@ from taylorseer_style.pixelgen_sampler import TaylorSeerHeunSamplerJiT  # noqa: 
 
 
 def real_batch_sample_ids(sample_ids: Iterable[Any], batch_size: int) -> tuple[int, ...]:
-    values = tuple(int(value) for value in sample_ids)
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    raw_values = tuple(sample_ids)
+    if any(isinstance(value, bool) or not isinstance(value, numbers.Integral) for value in raw_values):
+        raise TypeError("sample IDs must be integers")
+    values = tuple(int(value) for value in raw_values)
     if len(values) == batch_size:
         return values
     if len(values) == 2 * batch_size and values[:batch_size] == values[batch_size:]:
@@ -66,7 +72,7 @@ class PixelRemainderTaylorHeunSampler(TaylorSeerHeunSamplerJiT):
     ) -> torch.Tensor:
         velocity_2b = (raw - cfg_x) / (
             1.0 - cfg_t.view(-1, 1, 1, 1)
-        ).clamp_min(sampler.t_eps)
+        ).clamp_min(self.t_eps)
         guidance = (
             self.guidance
             if gate_t[0] > self.guidance_interval_min

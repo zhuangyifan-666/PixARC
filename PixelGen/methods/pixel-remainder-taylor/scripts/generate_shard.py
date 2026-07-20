@@ -26,6 +26,10 @@ for item in (METHOD_ROOT, SHARED_ROOT, BASELINE_ROOT):
         sys.path.insert(0, str(item))
 
 from pixel_remainder_taylor.config import load_config  # noqa: E402
+from pixel_remainder_taylor.protocol import (  # noqa: E402
+    executable_tree_sha256,
+    validate_compatible_manifest_sidecar,
+)
 from taylorseer_style.image_io import load_metadata_jsonl, resumable_batch_groups  # noqa: E402
 from taylorseer_style.manifest import (  # noqa: E402
     load_manifest,
@@ -37,11 +41,16 @@ from taylorseer_style.manifest import (  # noqa: E402
 from taylorseer_style.metadata import (  # noqa: E402
     atomic_create_json,
     atomic_write_json,
+    build_run_metadata,
     canonical_hash,
     checkpoint_identity,
     git_revision,
     load_json,
+    source_tree_sha256,
 )
+
+
+TAYLORSEER_COMMIT = "704ee98c74f7f04da443daa3c0aa2cc7803d86e3"
 
 
 def _checkpoint(value: str, origin: Path) -> Path:
@@ -109,6 +118,19 @@ def main() -> None:
     config_path = Path(args.config).resolve(strict=True)
     config = load_config(config_path)
     runtime = dict(config["runtime"]); method = dict(config["method"])
+    debug = dict(method.get("debug", {}))
+    fixed_parity = method["mode"] == "fixed_schedule_parity"
+    identity_interval = (
+        int(debug["interval"])
+        if fixed_parity
+        else int(method["max_taylor_span"]) + 1
+    )
+    identity_max_order = int(debug["order"]) if fixed_parity else 2
+    coordinate_mode = (
+        "pixel_remainder_legacy_parity_v1"
+        if fixed_parity
+        else "pixel_remainder_nonuniform_v1"
+    )
     model_config = dict(config["model"])
     sampler = dict(model_config["diffusion_sampler"])
     sampler_args = dict(sampler["init_args"])
@@ -121,9 +143,9 @@ def main() -> None:
     resolution = int(denoiser_args.get("input_size", 256)); batch_size = int(runtime["batch_size"])
     records = load_manifest(args.manifest)
     validate_manifest(records, world_size=args.world_size, batch_size=batch_size)
-    sidecar = Path(args.manifest).with_suffix(Path(args.manifest).suffix + ".meta.json")
-    validate_manifest_sidecar(
+    sidecar, _sidecar_metadata = validate_compatible_manifest_sidecar(
         args.manifest, records, world_size=args.world_size, batch_size=batch_size,
+        validator=validate_manifest_sidecar,
         generator_device="cpu", noise_dtype="float32", noise_shape=(3, resolution, resolution),
     )
     output = Path(args.output_root).resolve()
@@ -148,32 +170,111 @@ def main() -> None:
         records, args.shard_id, output / "samples", existing,
         manifest_sha256=manifest_hash, config_hash=config_hash,
         checkpoint_path=str(checkpoint), checkpoint_size=int(checkpoint_info["checkpoint_size"]),
-        method=str(method["mode"]), interval=int(method["max_taylor_span"]) + 1,
-        max_order=2, coordinate_mode="pixel_remainder_dynamic_v1", resolution=resolution,
+        method=str(method["mode"]), interval=identity_interval,
+        max_order=identity_max_order, coordinate_mode=coordinate_mode, resolution=resolution,
     )
-    run_value = {
-        "schema_version": config["schema_version"], "model": "PixelGen-JiT",
-        "method": method["mode"], "tau": method.get("tau"),
-        "max_taylor_span": method["max_taylor_span"], "config_hash": config_hash,
-        "manifest_sha256": manifest_hash, "manifest_records_sha256": manifest_records_sha256(records),
-        "checkpoint_path": str(checkpoint), "checkpoint_size": int(checkpoint_info["checkpoint_size"]),
-        "git_commit": git_revision(PIXARC_ROOT), "world_size": args.world_size,
-        "batch_size": batch_size, "expected_nfe_per_trajectory": 99,
+    normalized_model = {
+        key: value
+        for key, value in model_config.items()
+        if key not in {"denoiser", "diffusion_sampler", "compile_mode"}
+    }
+    normalized_model["diffusion_trainer"] = {
+        "class_path": "taylorseer_style.pixelgen_lightning.InferenceOnlyTrainer",
+        "init_args": {},
+    }
+    normalized_model["denoiser"] = {
+        "class_path": "taylorseer_style.pixelgen_model.TaylorSeerPixelGenJiT",
+        "init_args": {
+            key: value
+            for key, value in denoiser_args.items()
+            if not key.startswith(("method_", "debug_")) and key != "compile_mode"
+        },
+    }
+    normalized_sampler = {
+        **sampler,
+        "class_path": "taylorseer_style.pixelgen_sampler.TaylorSeerHeunSamplerJiT",
+    }
+    method_source_hash = canonical_hash({
+        "shared": executable_tree_sha256(SHARED_ROOT),
+        "pixelgen_adapter": executable_tree_sha256(METHOD_ROOT),
+    })
+    run_config = {
+        "model": "PixelGen-JiT",
+        "model_config_hash": canonical_hash(normalized_model),
+        "ema": "ema_denoiser",
+        "input_config_hash": config_hash,
+        "port_source_sha256": source_tree_sha256(BASELINE_ROOT),
+        "method_source_sha256": method_source_hash,
+        "manifest_sha256": manifest_hash,
+        "manifest_sidecar_sha256": sha256_file(sidecar),
+        "manifest_records_sha256": manifest_records_sha256(records),
+        "initial_noise_protocol": "per-sample torch.Generator(device='cpu') standard Gaussian, dataset noise_scale",
+        "rng_device": "cpu",
+        "generator_type": "torch.Generator.manual_seed per sample",
+        "initial_noise_dtype": "float32",
+        "initial_noise_shape": [3, resolution, resolution],
+        "noise_scale": float(runtime.get("noise_scale", 1.0)),
+        "sampler": "exact_heun",
+        "sampler_config_hash": canonical_hash(normalized_sampler),
+        "steps": int(sampler_args["num_steps"]),
+        "cfg_scale": float(sampler_args["guidance"]),
+        "guidance_interval": [
+            float(sampler_args.get("guidance_interval_min", 0.0)),
+            float(sampler_args.get("guidance_interval_max", 1.0)),
+        ],
+        "timeshift": float(sampler_args.get("timeshift", 1.0)),
+        "dtype": str(runtime.get("precision", "bf16-mixed")),
+        "resolution": resolution,
+        "image_postprocessing": "PixelGen fp2uint8 after identity PixelAE decode; RGB uint8 PNG",
+        "world_size": args.world_size,
+        "batch_size": batch_size,
+        "batch_grouping": "manifest batch_group_id/position_in_batch",
+        "compile_mode": runtime.get("compile_mode", "matched_eager"),
+        "coordinate_mode": coordinate_mode,
+    }
+    run_value = build_run_metadata(
+        model="PixelGen-JiT",
+        method=str(method["mode"]),
+        config=run_config,
+        checkpoint=checkpoint,
+        manifest_sha256=manifest_hash,
+        git_commit=git_revision(PIXARC_ROOT),
+        taylorseer_commit=TAYLORSEER_COMMIT,
+    )
+    run_value.update({
+        "method_schema_version": config["schema_version"],
+        "input_config_hash": config_hash,
+        "method_source_sha256": method_source_hash,
+        "tau": method.get("tau"),
+        "max_taylor_span": method["max_taylor_span"],
+        "expected_nfe_per_trajectory": 99,
         "expected_network_forwards_per_trajectory": 99,
         "forward_contract": "one combined 2B CFG forward per NFE",
-    }
+        "identity_interval": identity_interval,
+        "identity_max_order": identity_max_order,
+        "coordinate_mode": coordinate_mode,
+    })
     run_manifest = output / "run_manifest.json"
     if not run_manifest.exists():
         atomic_create_json(run_manifest, run_value)
-    if load_json(run_manifest) != run_value:
-        raise RuntimeError("existing run_manifest does not match this invocation")
+    existing_run = load_json(run_manifest)
+    for key in (
+        "config", "input_config_hash", "manifest_sha256",
+        "manifest_sidecar_sha256", "checkpoint_path", "checkpoint_size",
+        "method", "tau", "max_taylor_span", "git_commit",
+        "pytorch_version", "method_source_sha256",
+    ):
+        if existing_run.get(key) != run_value.get(key):
+            raise RuntimeError(f"existing run_manifest mismatch: {key}")
     if not pending:
         result = {
             "generated": len(existing), "generated_this_invocation": 0,
             "skipped_groups": len(skipped), "shard_id": args.shard_id,
             "tau": method.get("tau"), "max_taylor_span": method["max_taylor_span"],
         }
-        atomic_write_json(output / "summaries" / f"rank_{args.shard_id}_summary.json", result)
+        summary_path = output / "summaries" / f"rank_{args.shard_id}_summary.json"
+        if not summary_path.exists():
+            atomic_write_json(summary_path, result)
         print(json.dumps(result, indent=2, sort_keys=True)); return
 
     resolved = {
@@ -191,7 +292,6 @@ def main() -> None:
                           "resolution": resolution, "resume": args.resume},
         }],
     })
-    debug = dict(method.get("debug", {}))
     denoiser_args.update({
         "method_mode": method["mode"], "method_tau": method.get("tau"),
         "method_max_taylor_span": method["max_taylor_span"],
@@ -215,8 +315,8 @@ def main() -> None:
                 "world_size": args.world_size, "output_root": str(output), "batch_size": batch_size,
                 "config_hash": config_hash, "checkpoint_path": str(checkpoint),
                 "checkpoint_size": int(checkpoint_info["checkpoint_size"]),
-                "method": method["mode"], "interval": int(method["max_taylor_span"]) + 1,
-                "max_order": 2, "coordinate_mode": "pixel_remainder_dynamic_v1",
+                "method": method["mode"], "interval": identity_interval,
+                "max_order": identity_max_order, "coordinate_mode": coordinate_mode,
                 "resolution": resolution, "noise_scale": float(runtime.get("noise_scale", 1.0)),
                 "resume": args.resume,
             },

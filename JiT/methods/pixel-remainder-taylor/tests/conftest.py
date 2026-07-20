@@ -5,5 +5,7 @@ from pathlib import Path
 
 
 BASE = Path(__file__).resolve().parents[1]
-if str(BASE) not in sys.path:
-    sys.path.insert(0, str(BASE))
+SCRIPTS = BASE / "scripts"
+for path in (BASE, SCRIPTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))

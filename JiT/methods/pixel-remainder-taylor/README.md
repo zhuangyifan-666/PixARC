@@ -6,6 +6,12 @@ model calls per NFE (198 calls for exact 50-step Heun); PixelGen executes one
 combined `[unconditional, conditional]` 2B call per NFE (99 calls). Pixel
 planning runs only after guidance and never invokes the model.
 
+Adaptive feature and pixel forecasts use the most recent exact anchors with
+non-uniform Lagrange extrapolation and FP32 accumulation before one output
+cast. This is required because dynamically selected Full spans do not form a
+uniform grid. The debug-only fixed parity mode keeps the frozen TaylorSeer
+recursive arithmetic so its output remains directly replayable.
+
 The only primary sweep controls are `tau` and `max_taylor_span`. Feature history
 is fixed at order two, pixel history at order three, warmup at three Full NFE,
 pooling at 8, and batch reduction at the real-batch mean. `instrumented_full`
@@ -17,7 +23,9 @@ as extra 1K trajectories.
 ```bash
 PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' \
 python -m pytest -q -p no:cacheprovider \
-  JiT/methods/pixel-remainder-taylor/tests \
+  JiT/methods/pixel-remainder-taylor/tests
+PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' \
+python -m pytest -q -p no:cacheprovider \
   PixelGen/methods/pixel-remainder-taylor/tests
 ```
 
@@ -32,6 +40,7 @@ export PIXEL_REMAINDER_GPU_RUN_ALLOWED=1
 export RUN_ROOT=/absolute/path/outside/PixARC/prt
 export ADM_REFERENCE=/absolute/path/imagenet_256_adm_reference.npz
 export ADM_EVALUATOR=/absolute/path/ADM/evaluator.py
+export PIXEL_REMAINDER_PYTHON=/absolute/path/to/the/model-family/python
 ```
 
 Check checkpoint paths in the selected YAML files. JiT manifests must record
@@ -80,6 +89,7 @@ Use the frozen manifests already checked into `results/.../protocol`; no
 baseline command appears in this sweep. Run all three configs for each model:
 
 ```bash
+export PIXEL_REMAINDER_PYTHON=/absolute/path/to/jit/python
 for TAU in 01 02 04; do
   bash JiT/methods/pixel-remainder-taylor/scripts/launch_4gpu.sh \
     --model JiT \
@@ -87,6 +97,10 @@ for TAU in 01 02 04; do
     --manifest results/JiT/baselines/taylorseer/protocol/manifest_1k.jsonl \
     --output-root "$RUN_ROOT/1k/jit_prt_t0p${TAU}_h3" --expected-count 1000
 
+done
+
+export PIXEL_REMAINDER_PYTHON=/absolute/path/to/pixelgen/python
+for TAU in 01 02 04; do
   bash JiT/methods/pixel-remainder-taylor/scripts/launch_4gpu.sh \
     --model PixelGen \
     --config "PixelGen/methods/pixel-remainder-taylor/configs/pixelgen_xl_256_prt_t0p${TAU}_h3.yaml" \
@@ -95,8 +109,9 @@ for TAU in 01 02 04; do
 done
 ```
 
-The launcher wall clock, not a sum of rank times, is in
-`launcher_timing.json`. Each output contains immutable input snapshots,
+The restart-safe cumulative launcher wall clock is in `launcher_timing.json`;
+individual invocations are immutable records below `launcher_invocations/`.
+Each output contains immutable input snapshots,
 per-image metadata, per-rank summaries, and complete JSONL trajectory traces.
 
 ## Evaluation and final tables
@@ -107,8 +122,6 @@ as TaylorSeer. It requires an existing matched Full image root, the ADM
 reference NPZ and evaluator. Example:
 
 ```bash
-ELAPSED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["elapsed_seconds"])' \
-  "$RUN_ROOT/1k/jit_prt_t0p01_h3/launcher_timing.json")
 python JiT/methods/pixel-remainder-taylor/scripts/evaluate_1k.py \
   --model JiT --run prt_t0p01_h3 \
   --candidate-root "$RUN_ROOT/1k/jit_prt_t0p01_h3" \
@@ -116,7 +129,6 @@ python JiT/methods/pixel-remainder-taylor/scripts/evaluate_1k.py \
   --manifest results/JiT/baselines/taylorseer/protocol/manifest_1k.jsonl \
   --reference-manifest results/JiT/baselines/taylorseer/protocol/manifest_1k.jsonl \
   --reference-npz "$ADM_REFERENCE" --evaluator "$ADM_EVALUATOR" \
-  --elapsed-seconds "$ELAPSED" \
   --trace "$RUN_ROOT/1k/jit_prt_t0p01_h3/traces/rank_*.jsonl" \
   --output-dir "$RUN_ROOT/eval"
 ```
